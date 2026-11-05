@@ -450,8 +450,9 @@ class MainActivity : Activity() {
             if (top != oldTop || bottom != oldBottom) placeRow(animate = false) // the drop is measured from the layout
         }
 
-        // Top bar: network, All apps, Android settings, launcher settings. Round, lit on focus.
+        // Top bar: collapsible menu toggle, network, All apps, Android settings, launcher settings. Round, lit on focus.
         for ((id, action) in listOf<Pair<Int, () -> Unit>>(
+            R.id.topMenuToggle to { expandTopBar() },
             R.id.wifi to { unlock { openSettings(Settings.ACTION_WIFI_SETTINGS) } },
             R.id.sourcesButton to { showSources(findViewById(R.id.sourcesButton)) },
             R.id.allAppsButton to { openAllApps() },
@@ -465,7 +466,7 @@ class MainActivity : Activity() {
             // Under the ring, the icon's shadow (see iconShadow); empty until fitInk.
             background = LayerDrawable(arrayOf(ColorDrawable(Color.TRANSPARENT), ring))
             setOnFocusChangeListener { v, focused ->
-                if (focused) lastTop = v
+                if (focused && id != R.id.topMenuToggle) lastTop = v
                 (background as LayerDrawable).getDrawable(0).alpha = if (focused) 0 else 255 // on its disc it needs none
                 // With glass a lit icon sits on a glass disc: the frost, its light and the wallpaper's tint.
                 val disc = glassActive()
@@ -481,6 +482,12 @@ class MainActivity : Activity() {
                 }
                 animate().scaleX(if (focused) 1.15f else 1f).scaleY(if (focused) 1.15f else 1f)
                     .setDuration(160).setInterpolator(DECELERATE).start()
+                if (!focused && topBarExpanded) {
+                    ui.post {
+                        val cur = currentFocus
+                        if (cur?.parent !== wifi.parent && movingTop == null) collapseTopBar()
+                    }
+                }
             }
             setOnClickListener { action() }
             setOnLongClickListener { if (!holdFired) fireHold(this); true } // hold OK: move, hide or add icons
@@ -534,11 +541,24 @@ class MainActivity : Activity() {
     }
 
     private fun updateDeviceBadges() {
+        val gamepadButtons = intArrayOf(
+            KeyEvent.KEYCODE_BUTTON_A,
+            KeyEvent.KEYCODE_BUTTON_B,
+            KeyEvent.KEYCODE_BUTTON_X,
+            KeyEvent.KEYCODE_BUTTON_Y,
+            KeyEvent.KEYCODE_BUTTON_L1,
+            KeyEvent.KEYCODE_BUTTON_R1
+        )
         val hasGamepad = android.view.InputDevice.getDeviceIds().any { id ->
             val dev = android.view.InputDevice.getDevice(id) ?: return@any false
+            if (dev.isVirtual) return@any false
             val s = dev.sources
-            (s and android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD ||
+            val hasSource = (s and android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD ||
                 (s and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK
+            if (!hasSource) return@any false
+            val name = dev.name.lowercase()
+            if ("rc" in name || "remote" in name || "cec" in name || "virtual" in name || "keypad" in name || "mtk" in name || "aml" in name) return@any false
+            dev.hasKeys(*gamepadButtons).count { it } >= 4
         }
         val audioMgr = getSystemService(android.media.AudioManager::class.java)
         val hasHeadphones = audioMgr?.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)?.any { d ->
@@ -1136,6 +1156,7 @@ class MainActivity : Activity() {
         when {
             settingsScrim.visibility == View.VISIBLE -> pageBack?.invoke() ?: closeLauncherSettings()
             allApps.visibility == View.VISIBLE -> closeAllApps()
+            topBarExpanded -> collapseTopBar(focusToggle = true)
             !editing && wallPreview == null -> setClean(true) // photo-frame mode: just the wallpaper, the clock and the weather
         }
     }
@@ -1166,7 +1187,7 @@ class MainActivity : Activity() {
     private fun setClean(on: Boolean, animate: Boolean = true) {
         if (clean == on) return
         clean = on
-        val views = listOf(R.id.inputsContainer, R.id.homeVerticalScroll, R.id.wifi, R.id.sourcesButton,
+        val views = listOf(R.id.inputsContainer, R.id.homeVerticalScroll, R.id.topMenuToggle, R.id.wifi, R.id.sourcesButton,
             R.id.allAppsButton, R.id.systemSettings, R.id.launcherSettings, R.id.powerButton).mapNotNull { findViewById<View>(it) }
         val target = if (on) 0f else 1f
         for (v in views) {
@@ -1277,8 +1298,8 @@ class MainActivity : Activity() {
     private var iconInk = Color.BLACK
     private var appsInk = Color.BLACK
 
-    private fun topIcons() = TOP_KEYS.keys.toList()
-        .map { findViewById<ImageView>(it) }
+    private fun topIcons() = (listOf(R.id.topMenuToggle) + TOP_KEYS.keys.toList())
+        .mapNotNull { findViewById<ImageView>(it) }
 
     private fun fitInk() {
         val top = listOf(R.id.clock, R.id.date, R.id.weather, R.id.featured).map { findViewById<TextView>(it) }
@@ -4989,7 +5010,8 @@ class MainActivity : Activity() {
         val apps = alive(lastApp)?.takeIf { appRows.any { row -> row === it.parent } } ?: appRows.firstOrNull()?.getChildAt(1) ?: appRows.firstOrNull()?.getChildAt(0)
         val cards = if (watchScroll.visibility != View.VISIBLE) null
             else alive(lastCard) ?: (watchRow.getChildAt(0) as? ViewGroup)?.getChildAt(0)
-        val top = alive(lastTop) ?: findViewById(R.id.launcherSettings)
+        val top = if (!topBarExpanded) findViewById(R.id.topMenuToggle)
+            else alive(lastTop)?.takeIf { it.visibility == View.VISIBLE } ?: findViewById(R.id.launcherSettings)
         val currentRow = findAppRowFor(v)
         val inputsContainer = findViewById<LinearLayout>(R.id.inputsBar)
 
@@ -5007,9 +5029,8 @@ class MainActivity : Activity() {
                     KeyEvent.KEYCODE_DPAD_LEFT -> if (inputIdx == 0) v else null
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         if (inputIdx < totalInputs - 1) null
-                        else {
-                            shownTop().mapNotNull { findViewById<View>(it) }.firstOrNull { it.visibility == View.VISIBLE } ?: v
-                        }
+                        else if (!topBarExpanded) findViewById(R.id.topMenuToggle)
+                        else shownTop().mapNotNull { findViewById<View>(it) }.firstOrNull { it.visibility == View.VISIBLE } ?: v
                     }
                     else -> null
                 }
@@ -5022,13 +5043,13 @@ class MainActivity : Activity() {
                 }
                 KeyEvent.KEYCODE_DPAD_UP -> v
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    if (v.id == shownTop().first()) {
+                    if (v.id == R.id.topMenuToggle || v.id == shownTop().first()) {
                         if (inputsContainer != null && inputsContainer.childCount > 0) {
                             inputsContainer.getChildAt(inputsContainer.childCount - 1)
                         } else v
                     } else null
                 }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> if (v.id == shownTop().last()) v else null
+                KeyEvent.KEYCODE_DPAD_RIGHT -> if (v.id == R.id.topMenuToggle || v.id == shownTop().last()) v else null
                 else -> null
             }
             currentRow != null -> {
@@ -5315,6 +5336,7 @@ class MainActivity : Activity() {
     private val TOP_KEYS = linkedMapOf(R.id.wifi to "wifi", R.id.sourcesButton to "sources", R.id.allAppsButton to "apps",
         R.id.systemSettings to "system", R.id.launcherSettings to "plume", R.id.powerButton to "power")
 
+    private var topBarExpanded = false
     private var movingTop: View? = null // the icon being moved, while Left and Right slide it
     private var topLive: List<Int> = emptyList() // the order while moving; saved when OK places the icon
     private var topBefore: List<Int> = emptyList() // the order when the move started, for Back
@@ -5329,6 +5351,56 @@ class MainActivity : Activity() {
     /** What is really on screen: Sources stays out while the TV has no input. */
     private fun shownTop(order: List<Int> = topOrder()) = order.filter { it != R.id.sourcesButton || sources.isNotEmpty() }
 
+    private fun expandTopBar() {
+        if (topBarExpanded) return
+        topBarExpanded = true
+        val toggle = findViewById<View>(R.id.topMenuToggle)
+        toggle?.visibility = View.GONE
+        val shown = shownTop()
+        shown.forEachIndexed { idx, id ->
+            val v = findViewById<View>(id) ?: return@forEachIndexed
+            v.visibility = View.VISIBLE
+            if (animationsOn()) {
+                v.alpha = 0f
+                v.translationX = dp(18).toFloat()
+                v.animate().alpha(1f).translationX(0f).setDuration(180).setStartDelay((idx * 18).toLong()).setInterpolator(DECELERATE).start()
+            } else {
+                v.alpha = 1f
+                v.translationX = 0f
+            }
+        }
+        val targetId = lastTop?.id?.takeIf { it in shown } ?: R.id.launcherSettings.takeIf { it in shown } ?: shown.lastOrNull()
+        targetId?.let { findViewById<View>(it)?.requestFocus() }
+        glass.kick(260)
+    }
+
+    private fun collapseTopBar(focusToggle: Boolean = false) {
+        if (!topBarExpanded) return
+        topBarExpanded = false
+        val toggle = findViewById<View>(R.id.topMenuToggle)
+        TOP_KEYS.keys.forEach { id ->
+            findViewById<View>(id)?.apply {
+                animate().cancel()
+                visibility = View.GONE
+            }
+        }
+        toggle?.apply {
+            visibility = View.VISIBLE
+            if (animationsOn()) {
+                alpha = 0f
+                scaleX = 0.85f
+                scaleY = 0.85f
+                animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(160).setInterpolator(DECELERATE).start()
+            } else {
+                alpha = 1f
+                scaleX = 1f
+                scaleY = 1f
+            }
+            if (focusToggle) requestFocus()
+        }
+        glass.kick(200)
+    }
+
     /** Puts the icons in [order], hides the others, and gives the first one on screen no left margin. */
     private fun applyTopBar(order: List<Int> = topOrder()) {
         val bar = wifi.parent as LinearLayout
@@ -5342,12 +5414,16 @@ class MainActivity : Activity() {
             val v = views.getValue(id)
             val lp = v.layoutParams as LinearLayout.LayoutParams
             lp.marginStart = if (id == shown.firstOrNull()) 0 else dp(8)
-            v.visibility = if (id in shown) View.VISIBLE else View.GONE
+            v.visibility = if (topBarExpanded && id in shown) View.VISIBLE else View.GONE
             bar.addView(v, start + i, lp)
         }
+        findViewById<View>(R.id.topMenuToggle)?.visibility = if (topBarExpanded) View.GONE else View.VISIBLE
         // Taking the focused icon out passed focus on, down to the empty app row's scroller on a cold start, and
         // then the first fill of the row did not take it. Give it back to the bar.
-        focused?.let { (if (it.visibility == View.VISIBLE) it else findViewById(shown.first())).requestFocus() }
+        focused?.let {
+            if (!topBarExpanded) findViewById<View>(R.id.topMenuToggle)?.requestFocus()
+            else (if (it.visibility == View.VISIBLE) it else findViewById(shown.first())).requestFocus()
+        }
     }
 
     private fun saveTopOrder(order: List<Int>) {
@@ -5370,6 +5446,7 @@ class MainActivity : Activity() {
 
     /** Hold OK on a top-bar icon: Move, Hide (not Plume settings, so the bar is never empty) and Add icon. */
     private fun topMenu(v: View) {
+        if (v.id == R.id.topMenuToggle) return expandTopBar()
         if (locked()) return holdMenu(v, listOf(getString(R.string.unlock_to_edit) to { unlock { v.requestFocus(); topMenu(v) } }), below = true)
         val hidden = TOP_KEYS.keys - topOrder().toSet()
         holdMenu(v, listOfNotNull(
@@ -6288,14 +6365,16 @@ class MainActivity : Activity() {
 
     private val badge by lazy { GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(BADGE) } }
 
-    /** A dot on the Plume settings icon while an update waits or its notes are unread. */
+    /** A dot on the Plume settings icon (and the collapsed top bar toggle) while an update waits or its notes are unread. */
     private fun updateBadge() {
-        val icon = findViewById<ImageView>(R.id.launcherSettings)
-        icon.overlay.clear()
-        if (availableUpdate() == null && !notesUnseen()) return
-        val size = dp(9)
-        badge.setBounds(icon.width - size - dp(3), dp(3), icon.width - dp(3), dp(3) + size)
-        icon.overlay.add(badge)
+        for (id in intArrayOf(R.id.launcherSettings, R.id.topMenuToggle)) {
+            val icon = findViewById<ImageView>(id) ?: continue
+            icon.overlay.clear()
+            if (availableUpdate() == null && !notesUnseen()) continue
+            val size = dp(9)
+            badge.setBounds(icon.width - size - dp(3), dp(3), icon.width - dp(3), dp(3) + size)
+            icon.overlay.add(badge)
+        }
     }
 
     private fun installUpdate(ver: String) {

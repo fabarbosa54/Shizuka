@@ -165,6 +165,15 @@
                 android:layout_weight="1" />
 
             <ImageView
+                android:id="@+id/topMenuToggle"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:contentDescription="@string/plume_settings"
+                android:focusable="true"
+                android:padding="8dp"
+                android:src="@drawable/ic_tune" />
+
+            <ImageView
                 android:id="@+id/wifi"
                 android:layout_width="36dp"
                 android:layout_height="36dp"
@@ -235,10 +244,8 @@
             android:layout_weight="1"
             android:clipChildren="false"
             android:clipToPadding="false"
-            android:fadingEdgeLength="28dp"
             android:fillViewport="true"
             android:overScrollMode="never"
-            android:requiresFadingEdge="vertical"
             android:scrollbars="none">
 
             <LinearLayout
