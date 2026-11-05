@@ -530,8 +530,7 @@ class MainActivity : Activity() {
             c.translationY = dp(10).toFloat()
             c.animate().alpha(1f).translationY(0f).setDuration(220).setInterpolator(DECELERATE).start()
             glass.kick(260)
-        }
-        if (currentWallpaper().startsWith("video:")) videoWallpaper.resume()
+        }        if (currentWallpaper().startsWith("video:")) videoWallpaper.resume()
         returnTo = null // back by another way than Home: the next Home starts again at the first tile
         openedFrom?.get()?.let { tile -> ui.post { if (tile.isAttachedToWindow) settleRow(tile) } }
         openedFrom = null
@@ -6038,7 +6037,15 @@ class MainActivity : Activity() {
     private fun myVersion() = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
 
     /** The newer version a check found, if any (null again once it's installed). */
-    private fun availableUpdate() = prefs.getString("upd_ver", null)?.takeIf { newerVersion(it, myVersion()) }
+    private fun availableUpdate(): String? {
+        val ver = prefs.getString("upd_ver", null) ?: return null
+        // If the stored update is from the old Plume repo (e.g. 1.7.x) or not strictly newer, clear it.
+        if (!newerVersion(ver, myVersion()) || (myVersion() == "1.0.0" && ver.startsWith("1.7"))) {
+            prefs.edit().remove("upd_ver").remove("upd_told").apply()
+            return null
+        }
+        return ver
+    }
 
     private fun checkUpdate(force: Boolean) {
         if (checking || !force && System.currentTimeMillis() - prefs.getLong("upd_time", 0) < 24 * 3600_000L) return
