@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/plume-icon.png" alt="Shizuka logo" width="128">
+  <img src="docs/shizuka-icon.png" alt="Shizuka logo" width="128">
 </p>
 
 <h1 align="center">Shizuka Launcher</h1>
