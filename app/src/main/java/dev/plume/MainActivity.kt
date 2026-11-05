@@ -530,7 +530,8 @@ class MainActivity : Activity() {
             c.translationY = dp(10).toFloat()
             c.animate().alpha(1f).translationY(0f).setDuration(220).setInterpolator(DECELERATE).start()
             glass.kick(260)
-        }        if (currentWallpaper().startsWith("video:")) videoWallpaper.resume()
+        }
+        if (currentWallpaper().startsWith("video:")) videoWallpaper.resume()
         returnTo = null // back by another way than Home: the next Home starts again at the first tile
         openedFrom?.get()?.let { tile -> ui.post { if (tile.isAttachedToWindow) settleRow(tile) } }
         openedFrom = null
@@ -6154,7 +6155,7 @@ class MainActivity : Activity() {
         io.execute {
             val ok = try {
                 apk.delete()
-                openStream("https://github.com/$REPO/releases/download/v$ver/Plume.apk").use { input ->
+                openStream("https://github.com/$REPO/releases/download/v$ver/Shizuka.apk").use { input ->
                     apk.outputStream().use { input.copyTo(it) }
                 }
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
@@ -6165,7 +6166,7 @@ class MainActivity : Activity() {
                 installer.openSession(id).use { session ->
                     try {
                         apk.inputStream().use { input ->
-                            session.openWrite("Plume.apk", 0, apk.length()).use { out ->
+                            session.openWrite("Shizuka.apk", 0, apk.length()).use { out ->
                                 input.copyTo(out)
                                 session.fsync(out)
                             }
@@ -7110,7 +7111,7 @@ class MainActivity : Activity() {
             60 to R.string.every_60, 1440 to R.string.every_1440,
         )
         const val CHOSEN = "✓"
-        const val REPO = "aradhyas8/Plume_Launcher"
+        const val REPO = "fabarbosa54/Shizuka"
         const val UPDATE_STATUS = "dev.plume.UPDATE_STATUS"
         const val WRITE_EPG ="com.android.providers.tv.permission.WRITE_EPG_DATA"
         const val TV_SETTINGS = "com.android.tv.settings"
