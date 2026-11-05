@@ -530,7 +530,8 @@ class MainActivity : Activity() {
             c.translationY = dp(10).toFloat()
             c.animate().alpha(1f).translationY(0f).setDuration(220).setInterpolator(DECELERATE).start()
             glass.kick(260)
-        }        if (currentWallpaper().startsWith("video:")) videoWallpaper.resume()
+        }
+        if (currentWallpaper().startsWith("video:")) videoWallpaper.resume()
         returnTo = null // back by another way than Home: the next Home starts again at the first tile
         openedFrom?.get()?.let { tile -> ui.post { if (tile.isAttachedToWindow) settleRow(tile) } }
         openedFrom = null
