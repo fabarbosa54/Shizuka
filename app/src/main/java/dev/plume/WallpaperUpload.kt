@@ -188,12 +188,44 @@ internal fun fitWallpaper(open: () -> InputStream): Bitmap? {
     return out
 }
 
-/** Saves a phone photo as a wallpaper file (~300-500 KB JPEG). Returns the file, or null if it isn't an image. */
+/**
+ * Decodes a photo preserving its full original aspect ratio (uncropped).
+ * Upright (handles EXIF orientation), downsampled if larger than 3840px.
+ */
+internal fun decodeUncroppedWallpaper(open: () -> InputStream): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    open().use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val rotation = try {
+        open().use {
+            when (ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                else -> 0
+            }
+        }
+    } catch (e: Exception) {
+        0
+    }
+    val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
+    var sample = 1
+    while (maxDim / (sample * 2) >= 3840) sample *= 2
+    val decoded = open().use {
+        BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+    } ?: return null
+    return if (rotation == 0) decoded else {
+        Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, Matrix().apply { postRotate(rotation.toFloat()) }, true)
+            .also { if (it !== decoded) decoded.recycle() }
+    }
+}
+
+/** Saves a phone photo as a wallpaper file without cropping it. Returns the file, or null if it isn't an image. */
 internal fun importWallpaper(src: File, dir: File): File? {
-    val out = fitWallpaper { src.inputStream() } ?: return null
+    val out = decodeUncroppedWallpaper { src.inputStream() } ?: return null
     dir.mkdirs()
     val file = generateSequence(1) { it + 1 }.map { File(dir, "Photo $it.jpg") }.first { !it.exists() }
-    file.outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+    file.outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }
     out.recycle()
     return file
 }

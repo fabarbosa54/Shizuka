@@ -41,7 +41,7 @@
     </queries>
 
     <application
-        android:label="Plume"
+        android:label="Shizuka"
         android:banner="@drawable/banner"
         android:icon="@drawable/ic_launcher"
         android:usesCleartextTraffic="true"

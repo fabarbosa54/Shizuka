@@ -33,11 +33,13 @@ internal class OptionArt(private val kind: String, private val index: Int, priva
         val tile = ink(if (on) .85f else .45f)
         when (kind) {
             "size" -> {
-                val n = intArrayOf(8, 6, 4)[index]
-                val m = b.width() * 0.1f
-                val gap = b.width() * 0.025f
+                val sizes = intArrayOf(12, 10, 8, 6, 4)
+                val safeIndex = index.coerceIn(0, sizes.size - 1)
+                val n = sizes[safeIndex]
+                val m = b.width() * 0.08f
+                val gap = b.width() * 0.02f
                 val w = (b.width() - 2 * m - (n - 1) * gap) / n
-                val h = b.height() * 0.4f // one height for all three, so only the tiles' width and count change
+                val h = b.height() * 0.4f // one height for all, so only the tiles' width and count change
                 val top = b.centerY() - h / 2
                 paint.color = tile
                 for (i in 0 until n) c.drawRoundRect(b.left + m + i * (w + gap), top, b.left + m + i * (w + gap) + w, top + h, h * .18f, h * .18f, paint)
@@ -47,7 +49,7 @@ internal class OptionArt(private val kind: String, private val index: Int, priva
                 val gap = b.width() * 0.03f
                 val group = 3 * w + 2 * gap
                 val m = b.width() * 0.1f
-                val left = when (index) { 0 -> b.left + m; 1 -> b.centerX() - group / 2; else -> b.right - m - group }
+                val left = when (index.coerceIn(0, 2)) { 0 -> b.left + m; 1 -> b.centerX() - group / 2; else -> b.right - m - group }
                 val h = w * 0.75f
                 val top = b.centerY() - h / 2
                 paint.color = tile

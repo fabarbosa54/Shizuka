@@ -7,3 +7,8 @@ local.properties
 keystore.properties
 *.jks
 *.keystore
+.agents/
+graphify-out/
+screen_launcher.png
+test_home.png
+

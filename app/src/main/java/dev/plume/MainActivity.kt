@@ -32,6 +32,7 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.ColorFilter
 import android.graphics.ColorMatrix
+import android.graphics.Matrix
 import android.graphics.Outline
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
@@ -41,6 +42,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.Animatable
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ClipDrawable
 import android.graphics.drawable.ColorDrawable
@@ -76,12 +78,14 @@ import android.view.ViewGroup
 import android.view.Window
 import android.view.ViewOutlineProvider
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.HorizontalScrollView
+import android.widget.ScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
@@ -225,7 +229,10 @@ private val AUDIO_WORDS = listOf("soundbar", "sound bar", "sonos", "avr", "recei
 internal fun hdmiIcon(name: String, named: Boolean): String {
     val n = name.lowercase()
     return when {
-        "playstation" in n -> "playstation"
+        "wii" in n -> "wii"
+        "freebox" in n || "delta" in n || "player" in n -> "freebox"
+        "pc" in n || "ordinateur" in n || "computer" in n || "laptop" in n -> "pc"
+        "playstation" in n || "ps5" in n || "ps4" in n || "ps3" in n -> "playstation"
         "xbox" in n -> "xbox"
         "nintendo" in n || "switch" in n -> "nintendoswitch"
         "apple tv" in n || "appletv" in n -> "appletv"
@@ -331,6 +338,16 @@ class MainActivity : Activity() {
     private var cardLit = cardRest
 
     private lateinit var appRow: LinearLayout
+    private lateinit var appRowsContainer: LinearLayout
+    private lateinit var appRowsBelowWatchContainer: LinearLayout
+    private val appRows = mutableListOf<LinearLayout>()
+    private val appRowsAbove = mutableListOf<LinearLayout>()
+    private val appRowsBelow = mutableListOf<LinearLayout>()
+    private val appScrollers = mutableListOf<SnapScrollView>()
+    private val appNameRows = mutableListOf<LinearLayout>()
+    private val appRowLabels = mutableListOf<FittingLabel>()
+    private val categoryTitleViews = mutableListOf<TextView>()
+    private var editingRowIndex = 0
     private lateinit var watchRow: LinearLayout
     private lateinit var watchTitle: TextView
     private val appsTitle by lazy { findViewById<TextView>(R.id.appsTitle) }
@@ -376,14 +393,24 @@ class MainActivity : Activity() {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        GoogleNeonDrawable.theme = prefs.getString("glow", "google") ?: "google"
+        GoogleNeonDrawable.animMode = prefs.getString("glow_anim", "spin") ?: "spin"
+        GoogleNeonDrawable.glowThickness = prefs.getString("glow_thickness", "standard") ?: "standard"
         setContentView(R.layout.activity_main)
         glass = GlassLayer(this)
-        findViewById<ViewGroup>(R.id.root).addView(glass, 2, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)) // over both wallpaper layers
+        val root = findViewById<ViewGroup>(R.id.root)
+        root.addView(glass, root.indexOfChild(findViewById(R.id.content)), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)) // over wallpaper & scrim layers
         videoWallpaper = VideoWallpaper(findViewById<SurfaceView>(R.id.videoWallpaper),
             { findViewById<ImageView>(R.id.wallpaper).alpha = 0f },
             { findViewById<ImageView>(R.id.wallpaper).alpha = 1f; if (resumed) toast(getString(R.string.video_cannot_play), long = true) })
-        for (id in intArrayOf(R.id.appScroll, R.id.watchScroll, R.id.allApps)) findViewById<View>(id).setOnScrollChangeListener { _, _, _, _, _ -> glass.kick(150) }
+        for (id in intArrayOf(R.id.appScroll, R.id.watchScroll, R.id.allApps)) findViewById<View>(id)?.setOnScrollChangeListener { _, _, _, _, _ -> glass.kick(150) }
+        findViewById<ScrollView>(R.id.homeVerticalScroll)?.setOnScrollChangeListener { _, _, scrollY, _, _ ->
+            glass.kick(150)
+            updateHomeScrollFade(scrollY)
+        }
         appRow = findViewById(R.id.appRow)
+        appRowsContainer = findViewById(R.id.appRowsContainer)
+        appRowsBelowWatchContainer = findViewById(R.id.appRowsBelowWatchContainer)
         watchRow = findViewById(R.id.watchRow)
         watchTitle = findViewById(R.id.watchTitle)
         titleAlpha = watchTitle.alpha
@@ -409,12 +436,15 @@ class MainActivity : Activity() {
         }
         applyTopBar()
         applyTheme()
+        applyWallpaperScrim()
         glassShown = glassLook() to null // the tiles are built for this look; only the blur is still to come
+        findViewById<ImageView>(R.id.wallpaper).addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyWallpaperTransform() }
         loadWallpaper()
         // "Show row: On Down": the row slides in while one of its cards has focus, however focus got there.
         window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { _, now ->
             val out = rowShow() == "down" && now?.getTag(R.id.watchRow) is Prog
             if (out != rowOut) { rowOut = out; placeRow(animate = true) }
+            updateRowFocusDimming()
         }
         watchScroll.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
             if (top != oldTop || bottom != oldBottom) placeRow(animate = false) // the drop is measured from the layout
@@ -443,12 +473,19 @@ class MainActivity : Activity() {
                 if (focused && disc) glass.add(v, v.width / 2f) else glass.remove(v)
                 if (disc) glass.kick(260) // the disc grows with the icon
                 setColorFilter(if (focused) fg else iconInk)
+                if (focused) {
+                    foreground = GoogleNeonDrawable(isCircle = true, density = resources.displayMetrics.density)
+                } else {
+                    (foreground as? Animatable)?.stop()
+                    foreground = null
+                }
                 animate().scaleX(if (focused) 1.15f else 1f).scaleY(if (focused) 1.15f else 1f)
                     .setDuration(160).setInterpolator(DECELERATE).start()
             }
             setOnClickListener { action() }
             setOnLongClickListener { if (!holdFired) fireHold(this); true } // hold OK: move, hide or add icons
         }
+        renderInputsBar()
         if (fakeSetup(intent)) {
             // debug: setup for a pretend TV already started
         } else if (prefs.getBoolean("reopen_settings", false)) {
@@ -486,7 +523,14 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
-        if (currentWallpaper().startsWith("video:")) videoWallpaper.resume()
+        // Gentle entrance when Plume comes back: only opacity and a short slide, on the GPU.
+        if (animationsOn()) findViewById<View>(R.id.content)?.let { c ->
+            c.animate().cancel()
+            c.alpha = 0f
+            c.translationY = dp(10).toFloat()
+            c.animate().alpha(1f).translationY(0f).setDuration(220).setInterpolator(DECELERATE).start()
+            glass.kick(260)
+        }        if (currentWallpaper().startsWith("video:")) videoWallpaper.resume()
         returnTo = null // back by another way than Home: the next Home starts again at the first tile
         openedFrom?.get()?.let { tile -> ui.post { if (tile.isAttachedToWindow) settleRow(tile) } }
         openedFrom = null
@@ -519,6 +563,7 @@ class MainActivity : Activity() {
         Bing.onChanged = bingChanged
         Bing.refresh(applicationContext, prefs)
         ui.post { updateBadge() } // after layout, so the icon has its size
+        pokeIdle()
     }
 
     /** Auto theme flips at sunrise and sunset (or 7:00 and 19:00) even while the home screen just sits there. */
@@ -546,6 +591,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        setClean(false, animate = false)
         videoWallpaper.pause()
         findViewById<ImageView>(R.id.wallpaper).alpha = 1f
         ui.removeCallbacks(refreshIfDirty)
@@ -554,6 +600,7 @@ class MainActivity : Activity() {
         ui.removeCallbacks(wallpaperTick)
         if (editing) endEdit()
         if (movingTop != null) endTopMove(false) // Home or an app opened in the middle of a move: the bar goes back as it was
+        ui.removeCallbacks(idleCleanRunnable)
         super.onPause()
     }
 
@@ -976,8 +1023,59 @@ class MainActivity : Activity() {
         when {
             settingsScrim.visibility == View.VISIBLE -> pageBack?.invoke() ?: closeLauncherSettings()
             allApps.visibility == View.VISIBLE -> closeAllApps()
+            !editing && wallPreview == null -> setClean(true) // photo-frame mode: just the wallpaper, the clock and the weather
         }
     }
+
+    private var clean = false
+
+    /** The wallpaper's dominant colour, brightened: it tints the progress bars. Worked out once per wallpaper from its thumb. */
+    private var accentColor = DEFAULT_ACCENT
+
+    private fun accentOf(t: Bitmap): Int {
+        val hsv = FloatArray(3)
+        var r = 0f; var g = 0f; var b = 0f; var sum = 0f
+        for (y in 0 until t.height) for (x in 0 until t.width) {
+            val c = t.getPixel(x, y)
+            Color.colorToHSV(c, hsv)
+            if (hsv[1] < 0.2f || hsv[2] < 0.3f) continue
+            val w = hsv[1] * hsv[1] * hsv[2]
+            r += Color.red(c) * w; g += Color.green(c) * w; b += Color.blue(c) * w; sum += w
+        }
+        if (sum <= 0f) return DEFAULT_ACCENT
+        Color.RGBToHSV((r / sum).toInt(), (g / sum).toInt(), (b / sum).toInt(), hsv)
+        hsv[1] = hsv[1].coerceIn(0.55f, 0.9f)
+        hsv[2] = hsv[2].coerceIn(0.85f, 1f)
+        return Color.HSVToColor(hsv)
+    }
+
+    /** Photo-frame mode: the rows and icons fade away, leaving the wallpaper, the clock and the weather. */
+    private fun setClean(on: Boolean, animate: Boolean = true) {
+        if (clean == on) return
+        clean = on
+        val views = listOf(R.id.inputsContainer, R.id.homeVerticalScroll, R.id.wifi, R.id.sourcesButton,
+            R.id.allAppsButton, R.id.systemSettings, R.id.launcherSettings, R.id.powerButton).mapNotNull { findViewById<View>(it) }
+        val target = if (on) 0f else 1f
+        for (v in views) {
+            if (animate) v.animate().alpha(target).setDuration(300).start()
+            else { v.animate().cancel(); v.alpha = target }
+        }
+        glass.kick(350)
+    }
+
+    private val idleCleanRunnable = Runnable {
+        if (!clean && settingsScrim.visibility != View.VISIBLE && allApps.visibility != View.VISIBLE && resumed) {
+            setClean(true)
+        }
+    }
+
+    private fun pokeIdle() {
+        ui.removeCallbacks(idleCleanRunnable)
+        val min = prefs.getInt("idle_clean", 5)
+        if (min > 0) ui.postDelayed(idleCleanRunnable, min * 60_000L)
+    }
+
+    private fun idleCleanMinutes() = prefs.getInt("idle_clean", 5)
 
     // ---------- theme ----------
 
@@ -987,7 +1085,23 @@ class MainActivity : Activity() {
     private fun clockFace(): Typeface = when (prefs.getString("clock_style", "light")) {
         "bold" -> Typeface.create("sans-serif", Typeface.BOLD) // strong on busy wallpapers
         "serif" -> resources.getFont(R.font.clock_serif) // Fraunces, OFL
+        "pixel" -> Typeface.create("sans-serif-black", Typeface.NORMAL)
+        "apple" -> Typeface.create("sans-serif-medium", Typeface.NORMAL)
         else -> Typeface.create("sans-serif-light", Typeface.NORMAL)
+    }
+
+    private fun updateClockFormat() {
+        val clock = findViewById<android.widget.TextClock>(R.id.clock) ?: return
+        val style = prefs.getString("clock_style", "light")
+        if (style == "pixel") {
+            clock.format12Hour = "h\nmm"
+            clock.format24Hour = "HH\nmm"
+            clock.setLineSpacing(0f, 0.82f)
+        } else {
+            clock.format12Hour = "h:mm"
+            clock.format24Hour = "HH:mm"
+            clock.setLineSpacing(0f, 1f)
+        }
     }
 
     private fun clockSize() = CLOCK_SIZES.keys.first { it.toString() == prefs.getString("clock_size", "48") }
@@ -1007,10 +1121,11 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.root).setBackgroundColor(ground)
         // With glass, the wallpaper and the frost behind the grid are the point of All apps: let them show.
         allApps.setBackgroundColor(if (glassy != null) Color.TRANSPARENT else ground)
+        updateClockFormat()
         findViewById<TextView>(R.id.clock).typeface = clockFace()
         findViewById<TextView>(R.id.clock).textSize = clockSize().toFloat()
-        for (id in intArrayOf(R.id.clock, R.id.date, R.id.appsTitle, R.id.watchTitle, R.id.allAppsTitle, R.id.rowLabel, R.id.weather, R.id.featured)) {
-            findViewById<TextView>(id).setTextColor(fg)
+        for (id in intArrayOf(R.id.clock, R.id.date, R.id.appsTitle, R.id.watchTitle, R.id.allAppsTitle, R.id.rowLabel, R.id.weather, R.id.featured, R.id.inputLabel)) {
+            findViewById<TextView>(id)?.setTextColor(fg)
         }
         iconInk = fg
         for (v in topIcons()) v.setColorFilter(if (v.isFocused) fg else iconInk)
@@ -1035,19 +1150,41 @@ class MainActivity : Activity() {
     private fun fitInk() {
         val top = listOf(R.id.clock, R.id.date, R.id.weather, R.id.featured).map { findViewById<TextView>(it) }
         val topInk = inkBehind(top)
-        for (v in top) ink(v, topInk, fade = true)
+        for (v in top) ink(v, topInk, fade = true, strong = true)
+        findViewById<FittingLabel>(R.id.inputLabel)?.let { ink(it, topInk, fade = true, strong = true) }
         val icons = topIcons()
         iconInk = inkBehind(icons)
         for (v in icons) {
             if (!v.isFocused) v.setColorFilter(iconInk)
             iconShadow(v)
         }
-        val names = findViewById<LinearLayout>(R.id.nameRow).let { row -> (0 until row.childCount).map { row.getChildAt(it) as TextView } }
-        val apps = listOf(findViewById<TextView>(R.id.appsTitle)) + names
-        // Measured over the whole row, so the On focus name keeps one colour as it moves from tile to tile.
-        appsInk = inkBehind(apps + findViewById<View>(R.id.appScroll))
+        val inputsContainer = findViewById<LinearLayout>(R.id.inputsBar)
+        if (inputsContainer != null) {
+            for (i in 0 until inputsContainer.childCount) {
+                val iv = inputsContainer.getChildAt(i) as? ImageView ?: continue
+                val iconKey = iv.tag?.toString()?.substringAfterLast(":", "") ?: ""
+                if (!isColorInput(iconKey)) {
+                    if (!iv.isFocused) iv.setColorFilter(iconInk)
+                } else {
+                    iv.colorFilter = null
+                }
+                iconShadow(iv)
+            }
+        }
+        val names = appNameRows.flatMap { row -> (0 until row.childCount).mapNotNull { row.getChildAt(it) as? TextView } }
+        val apps = listOf(findViewById<TextView>(R.id.appsTitle)) + names + categoryTitleViews
+        // Measured over the whole row container, so the On focus name keeps one colour as it moves from tile to tile.
+        val scrollersToInk = if (appScrollers.isNotEmpty()) appScrollers else listOf(findViewById<View>(R.id.appScroll))
+        appsInk = inkBehind(apps + scrollersToInk)
         for (v in apps) ink(v, appsInk, fade = true)
-        ink(findViewById(R.id.rowLabel), appsInk, fade = true)
+        for (lbl in appRowLabels) ink(lbl, appsInk, fade = true, strong = true)
+        if (appRowLabels.isEmpty()) ink(findViewById(R.id.rowLabel), appsInk, fade = true, strong = true)
+        for (row in appRows) {
+            val gear = row.getChildAt(0) as? ImageView
+            if (gear?.tag?.toString()?.startsWith("category_gear:") == true) {
+                if (!gear.isFocused) gear.setColorFilter(appsInk)
+            }
+        }
         val cols = (0 until watchRow.childCount).map { watchRow.getChildAt(it) as ViewGroup }
         val watch = listOf(watchTitle) + cols.flatMap { col -> (0 until col.childCount).mapNotNull { col.getChildAt(it) as? TextView } }
         watchInk = inkBehind(watch)
@@ -1124,9 +1261,11 @@ class MainActivity : Activity() {
         compoundDrawableTintList = ColorStateList.valueOf(color)
     }
 
-    private fun ink(v: TextView, color: Int, fade: Boolean = false) {
+    private fun ink(v: TextView, color: Int, fade: Boolean = false, strong: Boolean = false) {
         if (wpThumb == null) v.setShadowLayer(0f, 0f, 0f, 0)
         // Tight and light: a wide one is cut off at the view's edges and shows as a dark box behind the text.
+        // Strong (clock, date, weather, selected names): a little wider and darker, still inside the view.
+        else if (strong) v.setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), if (color == Color.WHITE) 0xA6000000.toInt() else 0x80FFFFFF.toInt())
         else v.setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat(), if (color == Color.WHITE) 0x73000000 else 0x66FFFFFF)
         if (!fade || v.currentTextColor == color) return v.tint(color)
         ValueAnimator.ofArgb(v.currentTextColor, color).apply {
@@ -1380,6 +1519,8 @@ class MainActivity : Activity() {
                 if (isDestroyed || load != wallpaperLoad) return@post
                 wpThumb = thumb
                 wpFrames = listOfNotNull(thumb)
+                accentColor = thumb?.let { accentOf(it) } ?: DEFAULT_ACCENT
+                GoogleNeonDrawable.accent = accentColor
                 // The glass is tinted with the wallpaper's mean colour; kept, so the next start has it before the picture.
                 thumb?.let { t -> prefs.edit().putInt("glass_hue", meanColour(IntArray(t.width * t.height).also { t.getPixels(it, 0, t.width, 0, 0, t.width, t.height) })).apply() }
                 if (wantDark() != dark) return@post recreate() // the Wallpaper theme follows the new picture
@@ -1394,16 +1535,19 @@ class MainActivity : Activity() {
                     sharpPixels = sharp
                     applyGlass()
                     view.setImageBitmap(shown)
+                    applyWallpaperTransform()
                     if (video) videoWallpaper.show(File(wallpaperDir(), choice.removePrefix("video:")), resumed)
                     return@post
                 }
                 // Soft change from one photo to the next; then drop the old one so only one stays in memory.
                 val fade = TransitionDrawable(arrayOf(old, BitmapDrawable(resources, shown))).apply { isCrossFadeEnabled = true }
                 view.setImageDrawable(fade)
+                applyWallpaperTransform()
                 fade.startTransition(800)
                 ui.postDelayed({
                     if (isDestroyed || load != wallpaperLoad) return@postDelayed
                     if (view.drawable === fade) view.setImageBitmap(shown)
+                    applyWallpaperTransform()
                     glassPixels = screen
                     sharpPixels = sharp
                     applyGlass() // the frost changes with the picture, when the crossfade lands
@@ -1531,7 +1675,7 @@ class MainActivity : Activity() {
             }
             else -> {
                 val file = File(wallpaperDir(), choice.removePrefix("file:"))
-                fitWallpaper { file.inputStream() }
+                decodeUncroppedWallpaper { file.inputStream() } ?: fitWallpaper { file.inputStream() }
             }
         }
     }
@@ -1573,8 +1717,279 @@ class MainActivity : Activity() {
                 getString(PHOTO_EVERY[photoEvery()]!!) + "  ›", style = RowStyle(R.drawable.ms_schedule, help = getString(R.string.help_photo_every))) { pickPhotoEvery() } else null,
             if (current == ShowsWall.CHOICE) settingsRow(getString(R.string.wp_sources),
                 getString(R.string.n_on, wpSourceList().count { wpSourceOn(it.first) }) + "  ›", style = RowStyle(R.drawable.ms_filter_list, help = getString(R.string.help_wp_sources))) { pickWpSources() } else null,
+            if (!current.startsWith("plain:") && !current.startsWith("video:")) {
+                settingsRow(getString(R.string.wallpaper_adjustment),
+                    wallpaperAdjustmentSummary() + "  ›",
+                    style = RowStyle(R.drawable.ic_tune, help = getString(R.string.help_wallpaper_adjustment))) {
+                    pickWallpaperAdjustment(forDark)
+                }
+            } else null
         )
         wallGrid(getString(R.string.wallpaper), groups, forDark, current, focusOn, extras) { renderSettings(WALLPAPER_CARD) }
+    }
+
+    private fun applyWallpaperTransform() {
+        val view = findViewById<ImageView>(R.id.wallpaper) ?: return
+        val d = view.drawable ?: return
+        val bmpW = d.intrinsicWidth.toFloat()
+        val bmpH = d.intrinsicHeight.toFloat()
+        if (bmpW <= 0 || bmpH <= 0) return
+
+        val viewW = if (view.width > 0) view.width.toFloat() else resources.displayMetrics.widthPixels.toFloat()
+        val viewH = if (view.height > 0) view.height.toFloat() else resources.displayMetrics.heightPixels.toFloat()
+
+        val fit = prefs.getString("wp_fit", "crop") // "crop" or "fit"
+        val alignV = prefs.getString("wp_align_v", "center") // "top", "center", "bottom"
+        val zoom = prefs.getInt("wp_zoom", 100) / 100f
+        val offsetV = prefs.getInt("wp_offset_v", 0) / 100f
+
+        val baseScale = if (fit == "fit") {
+            minOf(viewW / bmpW, viewH / bmpH)
+        } else {
+            maxOf(viewW / bmpW, viewH / bmpH)
+        }
+        val finalScale = baseScale * zoom
+
+        val scaledW = bmpW * finalScale
+        val scaledH = bmpH * finalScale
+
+        val dx = (viewW - scaledW) / 2f
+        val baseDy = when (alignV) {
+            "top" -> 0f
+            "bottom" -> viewH - scaledH
+            else -> (viewH - scaledH) / 2f
+        }
+        val dy = baseDy + (offsetV * viewH)
+
+        val matrix = android.graphics.Matrix().apply {
+            postScale(finalScale, finalScale)
+            postTranslate(dx, dy)
+        }
+        view.scaleType = ImageView.ScaleType.MATRIX
+        view.imageMatrix = matrix
+        view.invalidate()
+    }
+
+    private fun glowKeys() = GLOW_NAMES.keys.toList()
+
+    private fun glowKey() = prefs.getString("glow", "google")?.takeIf { it in GLOW_NAMES } ?: "google"
+
+    private fun pickGlowStyle(focus: Int = 2 + glowKeys().indexOf(glowKey()).coerceAtLeast(0)) {
+        val current = glowKey()
+        val glowDrawables = mutableListOf<Animatable>()
+        val density = resources.displayMetrics.density
+        val r = dp(6).toFloat()
+        val keys = glowKeys()
+
+        val animKeys = GLOW_ANIMS.keys.toList()
+        val thickKeys = GLOW_THICKNESS.keys.toList()
+
+        val topRows = listOf(
+            Triple(
+                page(getString(R.string.glow_anim), getString(GLOW_ANIMS[GoogleNeonDrawable.animMode] ?: R.string.glow_anim_spin)) {
+                    val next = animKeys.step(GoogleNeonDrawable.animMode, 1)
+                    prefs.edit().putString("glow_anim", next).apply()
+                    GoogleNeonDrawable.animMode = next
+                    renderApps()
+                    pickGlowStyle(0)
+                },
+                RowStyle(icon = R.drawable.ms_routine),
+                0
+            ),
+            Triple(
+                page(getString(R.string.glow_thickness), getString(GLOW_THICKNESS[GoogleNeonDrawable.glowThickness] ?: R.string.glow_thickness_standard)) {
+                    val next = thickKeys.step(GoogleNeonDrawable.glowThickness, 1)
+                    prefs.edit().putString("glow_thickness", next).apply()
+                    GoogleNeonDrawable.glowThickness = next
+                    renderApps()
+                    pickGlowStyle(1)
+                },
+                RowStyle(icon = R.drawable.ms_format_size),
+                1
+            )
+        )
+
+        val themeRows = keys.mapIndexed { i, key ->
+            val isCurrent = key == current
+            val previewBox = FrameLayout(this).apply {
+                clipChildren = false
+                clipToPadding = false
+                background = GradientDrawable().apply {
+                    cornerRadius = r
+                    setColor(if (dark) 0x66000000.toInt() else 0x22000000.toInt())
+                }
+                val neon = GoogleNeonDrawable(radius = r, density = density, strokeWidthDp = 2.2f, overrideTheme = key)
+                glowDrawables += neon
+                foreground = neon
+            }
+            val subRes = GLOW_SUBS[key]
+            val subText = subRes?.let { getString(it) }
+            val name = getString(GLOW_NAMES.getValue(key))
+            Triple(
+                page(name, if (isCurrent) CHOSEN else "") {
+                    prefs.edit().putString("glow", key).apply()
+                    GoogleNeonDrawable.theme = key
+                    renderApps()
+                    pickGlowStyle(i + topRows.size)
+                },
+                RowStyle(sub = subText, leading = previewBox),
+                i + topRows.size
+            )
+        }
+
+        val allRows = topRows + themeRows
+
+        showPage(
+            title = getString(R.string.glow_style),
+            rows = allRows.map { it.first },
+            focus = focus.coerceIn(0, allRows.size - 1),
+            styles = allRows.map { it.second },
+            crumb = getString(R.string.section_style),
+            back = {
+                glowDrawables.forEach { it.stop() }
+                renderSettings(R.string.glow_style)
+            }
+        )
+        pageExit = {
+            glowDrawables.forEach { it.stop() }
+        }
+    }
+
+    private fun tileRadiusKey() = prefs.getString("tile_radius", "classic")?.takeIf { it in TILE_RADII } ?: "classic"
+
+    private fun tileRadius() = dp(TILE_RADII.getValue(tileRadiusKey()).second)
+
+    private fun focusDimmingOn() = prefs.getBoolean("focus_dim", true)
+
+    /** Rows other than the one holding focus rest a little dimmer; only alpha animates, so it costs no layout. */
+    private fun updateRowFocusDimming() {
+        if (!::watchRow.isInitialized || appRows.isEmpty()) return
+        val cur = currentFocus
+        val activeRow = cur?.let { findAppRowFor(it) }
+        val inWatch = cur?.getTag(R.id.watchRow) is Prog
+        val inRows = activeRow != null || inWatch
+        val on = focusDimmingOn() && inRows
+        fun set(v: View, active: Boolean) {
+            val target = if (on && !active) 0.72f else 1f
+            if (v.alpha != target) v.animate().alpha(target).setDuration(150).start()
+        }
+        appRows.forEach { set(it, it === activeRow) }
+        set(watchRow, inWatch)
+    }
+
+    private fun applyWallpaperScrim() {
+        val scrim = findViewById<View>(R.id.wallpaperScrim) ?: return
+        val dimPct = prefs.getInt("wp_dim", 15)
+        if (dimPct <= 0) {
+            scrim.background = null
+            return
+        }
+        val topAlpha = minOf(255, (dimPct * 1.65f * 2.55f).toInt())
+        val midAlpha = minOf(255, (dimPct * 0.90f * 2.55f).toInt())
+        val botAlpha = minOf(255, (dimPct * 1.45f * 2.55f).toInt())
+        scrim.background = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(
+                Color.argb(topAlpha, 0, 0, 0),
+                Color.argb(midAlpha, 0, 0, 0),
+                Color.argb(botAlpha, 0, 0, 0)
+            )
+        ).apply { setDither(true) }
+    }
+
+    private fun wallpaperAdjustmentSummary(): String {
+        val fit = if (prefs.getString("wp_fit", "crop") == "fit") getString(R.string.wp_fit_contain) else getString(R.string.wp_fit_crop)
+        val zoom = "${prefs.getInt("wp_zoom", 100)}%"
+        val dim = "${prefs.getInt("wp_dim", 15)}%"
+        return "$fit · $zoom · $dim"
+    }
+
+    private fun pickWallpaperAdjustment(forDark: Boolean) {
+        val currentFit = prefs.getString("wp_fit", "crop")!!
+        val currentAlignV = prefs.getString("wp_align_v", "center")!!
+        val currentZoom = prefs.getInt("wp_zoom", 100)
+        val currentOffsetV = prefs.getInt("wp_offset_v", 0)
+        val currentDim = prefs.getInt("wp_dim", 15)
+
+        val fitChoices = listOf(
+            getString(R.string.wp_fit_crop) to "crop",
+            getString(R.string.wp_fit_contain) to "fit"
+        )
+        val alignChoices = listOf(
+            getString(R.string.wp_align_top) to "top",
+            getString(R.string.wp_align_center) to "center",
+            getString(R.string.wp_align_bottom) to "bottom"
+        )
+        val zoomChoices = listOf(70, 80, 90, 100, 110, 120, 130, 150)
+        val offsetChoices = listOf(
+            "-30%" to -30,
+            "-20%" to -20,
+            "-10%" to -10,
+            "0%" to 0,
+            "+10%" to 10,
+            "+20%" to 20,
+            "+30%" to 30
+        )
+        val dimChoices = listOf(
+            getString(R.string.dim_off) to 0,
+            getString(R.string.dim_light) to 15,
+            getString(R.string.dim_medium) to 25,
+            getString(R.string.dim_strong) to 35,
+            getString(R.string.dim_dark) to 50
+        )
+
+        val rows = listOf(
+            page(getString(R.string.wallpaper_dim), dimChoices.firstOrNull { it.second == currentDim }?.first ?: "$currentDim%") {
+                showPage(getString(R.string.wallpaper_dim), dimChoices.map { (label, value) ->
+                    page(label, if (currentDim == value) "✓" else "") {
+                        prefs.edit().putInt("wp_dim", value).apply()
+                        applyWallpaperScrim()
+                        pickWallpaperAdjustment(forDark)
+                    }
+                }, back = { pickWallpaperAdjustment(forDark) })
+            },
+            page(getString(R.string.wp_fit_mode), if (currentFit == "fit") getString(R.string.wp_fit_contain) else getString(R.string.wp_fit_crop)) {
+                showPage(getString(R.string.wp_fit_mode), fitChoices.map { (label, key) ->
+                    page(label, if (currentFit == key) "✓" else "") {
+                        prefs.edit().putString("wp_fit", key).apply()
+                        applyWallpaperTransform()
+                        pickWallpaperAdjustment(forDark)
+                    }
+                }, back = { pickWallpaperAdjustment(forDark) })
+            },
+            page(getString(R.string.wp_align_vertical), when (currentAlignV) {
+                "top" -> getString(R.string.wp_align_top)
+                "bottom" -> getString(R.string.wp_align_bottom)
+                else -> getString(R.string.wp_align_center)
+            }) {
+                showPage(getString(R.string.wp_align_vertical), alignChoices.map { (label, key) ->
+                    page(label, if (currentAlignV == key) "✓" else "") {
+                        prefs.edit().putString("wp_align_v", key).apply()
+                        applyWallpaperTransform()
+                        pickWallpaperAdjustment(forDark)
+                    }
+                }, back = { pickWallpaperAdjustment(forDark) })
+            },
+            page(getString(R.string.wp_vertical_offset), if (currentOffsetV == 0) "0%" else "${if (currentOffsetV > 0) "+" else ""}$currentOffsetV%") {
+                showPage(getString(R.string.wp_vertical_offset), offsetChoices.map { (label, value) ->
+                    page(label, if (currentOffsetV == value) "✓" else "") {
+                        prefs.edit().putInt("wp_offset_v", value).apply()
+                        applyWallpaperTransform()
+                        pickWallpaperAdjustment(forDark)
+                    }
+                }, back = { pickWallpaperAdjustment(forDark) })
+            },
+            page(getString(R.string.wp_zoom_label), "$currentZoom%") {
+                showPage(getString(R.string.wp_zoom_label), zoomChoices.map { z ->
+                    page("$z%", if (currentZoom == z) "✓" else "") {
+                        prefs.edit().putInt("wp_zoom", z).apply()
+                        applyWallpaperTransform()
+                        pickWallpaperAdjustment(forDark)
+                    }
+                }, back = { pickWallpaperAdjustment(forDark) })
+            }
+        )
+        showPage(getString(R.string.wallpaper_adjustment), rows, back = { pickWallpaper(forDark) })
     }
 
     /** A tile in the wallpaper grid: a [choice]'s picture (for a tile that opens more, the one in use there) or an [icon]. */
@@ -2470,9 +2885,18 @@ class MainActivity : Activity() {
             },
             R.string.clock_style to { d ->
                 prefs.edit().putString("clock_style", CLOCK_STYLES.keys.toList().step(prefs.getString("clock_style", "light")!!, d)).apply()
+                updateClockFormat()
                 findViewById<TextView>(R.id.clock).typeface = clockFace()
                 findViewById<View>(R.id.clock).post { fitInk() } // the clock now covers other pixels
                 renderSettings(R.string.clock_style)
+            },
+            R.string.idle_clean to { d ->
+                val times = IDLE_CLEAN_TIMES.keys.toList()
+                val cur = prefs.getInt("idle_clean", 5)
+                val next = times.step(cur, d)
+                prefs.edit().putInt("idle_clean", next).apply()
+                pokeIdle()
+                renderSettings(R.string.idle_clean)
             },
             R.string.icon_style to { d ->
                 prefs.edit().putString("icon_style", ICON_STYLES.keys.toList().step(iconStyle(), d)).apply()
@@ -2487,6 +2911,18 @@ class MainActivity : Activity() {
                 prefs.edit().putString("row_size", ROW_SIZES.keys.toList().step(rowSize(), d)).apply()
                 renderApps()
                 renderSettings(R.string.row_size)
+            },
+            R.string.row_spacing to { d ->
+                prefs.edit().putString("row_spacing", ROW_SPACINGS.keys.toList().step(rowSpacing(), d)).apply()
+                renderApps()
+                renderSettings(R.string.row_spacing)
+            },
+            R.string.tile_radius to { d ->
+                prefs.edit().putString("tile_radius", TILE_RADII.keys.toList().step(tileRadiusKey(), d)).apply()
+                renderApps()
+                watchKey = null // rebuild the cards with the new corners
+                showWatchNext(watchList)
+                renderSettings(R.string.tile_radius)
             },
             R.string.row_position to { d ->
                 prefs.edit().putString("row_align", ROW_ALIGN.keys.toList().step(rowAlign(), d)).apply()
@@ -2545,6 +2981,8 @@ class MainActivity : Activity() {
                 renderSettings(R.string.sort_apps)
             },
             R.string.apps_in_row to Triple(getString(R.string.apps_in_row), if (rowHidden == 0) getString(R.string.all) else getString(R.string.n_of_m, apps.size - rowHidden, apps.size)) { pickRowApps() },
+            R.string.categories to Triple(getString(R.string.categories), "${categoriesList().size}") { pickCategoriesSettings() },
+            R.string.inputs_bar to Triple(getString(R.string.inputs_bar), "${TopInputManager.loadInputs(prefs, hdmiInputs().map { it.pkg to it.label }).count { !it.hidden }}") { pickInputsSettings() },
             R.string.row_position to Triple(getString(R.string.row_position), getString(ROW_ALIGN[rowAlign()]!!.first)) {
                 steps[R.string.row_position]!!(1)
             },
@@ -2556,6 +2994,20 @@ class MainActivity : Activity() {
             },
             R.string.row_size to Triple(getString(R.string.row_size), getString(ROW_SIZES.getValue(rowSize()).first)) {
                 steps[R.string.row_size]!!(1)
+            },
+            R.string.row_spacing to Triple(getString(R.string.row_spacing), getString(ROW_SPACINGS[rowSpacing()] ?: R.string.spacing_normal)) {
+                steps[R.string.row_spacing]!!(1)
+            },
+            R.string.tile_radius to Triple(getString(R.string.tile_radius), getString(TILE_RADII.getValue(tileRadiusKey()).first)) {
+                steps[R.string.tile_radius]!!(1)
+            },
+            R.string.glow_style to Triple(getString(R.string.glow_style), "${getString(GLOW_NAMES.getValue(glowKey()))}  ›") {
+                pickGlowStyle()
+            },
+            R.string.focus_dimming to Triple(getString(R.string.focus_dimming), toggle(focusDimmingOn())) {
+                prefs.edit().putBoolean("focus_dim", !focusDimmingOn()).apply()
+                updateRowFocusDimming()
+                renderSettings(R.string.focus_dimming)
             },
             R.string.restore_hidden to Triple(getString(R.string.restore_hidden), if (hidden == 0) getString(R.string.none_hidden) else resources.getQuantityString(R.plurals.show_again, hidden, hidden)) {
                 prefs.edit().remove("hidden_watch").apply()
@@ -2601,6 +3053,9 @@ class MainActivity : Activity() {
                 aerialScreensaverOn() -> getString(R.string.aerial_views)
                 else -> photoScreensaver()?.let { wallpaperName(it) } ?: getString(R.string.gallery)
             }) { pickScreensaver() },
+            R.string.idle_clean to Triple(getString(R.string.idle_clean), getString(IDLE_CLEAN_TIMES[idleCleanMinutes()] ?: R.string.idle_clean_off)) {
+                steps[R.string.idle_clean]!!(1)
+            },
             R.string.test_screensaver to Triple(getString(R.string.test_screensaver), "") { testScreensaver() },
             R.string.screensaver_timing to Triple(getString(R.string.screensaver_timing), "") { openScreensaverSettings() },
             R.string.setup_home to Triple(getString(R.string.setup_home), "") { closeLauncherSettings(); startHomeSetup() },
@@ -2610,7 +3065,7 @@ class MainActivity : Activity() {
                 HomeOverride.running?.applyKeyFilter()
                 renderSettings(R.string.smooth_volume)
             },
-            R.string.default_launcher to Triple(getString(R.string.default_launcher), if (isDefaultHome()) "Plume" else getString(R.string.press_to_set)) { makeDefaultHome() },
+            R.string.default_launcher to Triple(getString(R.string.default_launcher), if (isDefaultHome()) "Shizuka" else getString(R.string.press_to_set)) { makeDefaultHome() },
             R.string.updates to Triple(getString(R.string.updates), when {
                 updating -> getString(R.string.updating)
                 checking -> getString(R.string.checking)
@@ -2638,15 +3093,15 @@ class MainActivity : Activity() {
         // In the order things sit on the home screen, top to bottom, then the TV itself.
         val sections = listOf(
             Triple(R.string.section_style, "${rows[R.string.theme]!!.second} · ${getString(glassName())}",
-                listOf(R.string.theme, R.string.glass, R.string.app_animations)),
+                listOf(R.string.theme, R.string.glass, R.string.app_animations, R.string.tile_radius, R.string.glow_style, R.string.focus_dimming)),
             Triple(R.string.section_app_row, "${rows[R.string.apps_in_row]!!.second} · ${rows[R.string.row_position]!!.second}",
-                listOf(R.string.edit_apps_row, R.string.apps_in_row, R.string.sort_apps, R.string.icon_style, R.string.row_size, R.string.app_names, R.string.row_position)),
+                listOf(R.string.edit_apps_row, R.string.apps_in_row, R.string.categories, R.string.sort_apps, R.string.icon_style, R.string.row_size, R.string.row_spacing, R.string.app_names, R.string.row_position)),
             // "When hidden" only means something once the row can hide.
             Triple(R.string.bottom_row, "${rowName()} · ${rows[R.string.show_row]!!.second}", listOfNotNull(R.string.show_row, R.string.apps_when_hidden.takeIf { rowShow() != "always" },
                 R.string.row_name, R.string.show_icons, R.string.cw_apps, R.string.cw_channels, R.string.restore_hidden)),
             Triple(R.string.section_clock_weather, if (weather == "off") on(false) else "${rows[R.string.weather_units]!!.second} · ${prefs.getString("geo_city", null) ?: rows[R.string.weather_location]!!.second}",
                 listOf(R.string.clock_style, R.string.clock_size, R.string.weather, R.string.weather_units, R.string.weather_location)),
-            Triple(R.string.section_screensaver, rows[R.string.screensaver]!!.second, listOf(R.string.screensaver, R.string.test_screensaver, R.string.screensaver_timing)),
+            Triple(R.string.section_screensaver, rows[R.string.screensaver]!!.second, listOf(R.string.screensaver, R.string.idle_clean, R.string.test_screensaver, R.string.screensaver_timing)),
             // Home app is Android TV's own way (Google TV and Fire OS keep their home); Fire OS never passes keys to us, so no smooth volume there.
             Triple(R.string.section_remote_home, if (homeSetUp()) getString(R.string.home_button) else on(false),
                 listOfNotNull(R.string.home_button, R.string.default_launcher.takeIf { !googleTv() && !fireTv() }, R.string.smooth_volume.takeIf { !fireTv() },
@@ -2673,6 +3128,8 @@ class MainActivity : Activity() {
                 R.string.sort_apps to listOf(R.string.manual, R.string.most_used).map { getString(it) to null },
                 R.string.app_names to listOf(R.string.on_focus, R.string.always, R.string.never).map { getString(it) to null },
                 R.string.row_size to ROW_SIZES.values.map { getString(it.first) to null },
+                R.string.row_spacing to ROW_SPACINGS.values.map { getString(it) to null },
+                R.string.tile_radius to TILE_RADII.values.map { getString(it.first) to null },
                 R.string.row_position to ROW_ALIGN.values.map { getString(it.first) to null },
                 R.string.show_row to ROW_SHOW.values.map { getString(it) to null },
                 R.string.apps_when_hidden to listOf(R.string.stays_put, R.string.moves_down).map { getString(it) to null },
@@ -2680,6 +3137,7 @@ class MainActivity : Activity() {
                 R.string.weather_units to listOf("°C" to null, "°F" to null),
                 R.string.clock_style to CLOCK_STYLES.values.map { getString(it) to null },
                 R.string.clock_size to CLOCK_SIZES.values.map { getString(it) to null },
+                R.string.idle_clean to IDLE_CLEAN_TIMES.values.map { getString(it) to null },
             )
             val styles = keys.map { k ->
                 val cost = k == R.string.smooth_volume && prefs.getBoolean("smooth_volume", false)
@@ -2707,7 +3165,10 @@ class MainActivity : Activity() {
             Triple(WALLPAPER_CARD, page(getString(R.string.wallpaper), wallpaperName(wall)) { pickWallpaper(dark) },
                 RowStyle(thumb = wall to dark, help = getString(R.string.help_wallpaper), area = AREA_ALL, hero = true)) +
             group(R.string.group_home_screen) +
-            listOf(R.string.section_style, R.string.section_app_row, R.string.bottom_row, R.string.section_clock_weather, R.string.section_screensaver).map(sectionRow) +
+            listOf(R.string.section_style, R.string.section_app_row).map(sectionRow) +
+            listOf(Triple(R.string.inputs_bar, page(getString(R.string.inputs_bar), "${TopInputManager.loadInputs(prefs, hdmiInputs().map { it.pkg to it.label }).count { !it.hidden }}  ›") { pickInputsSettings() },
+                RowStyle(R.drawable.ic_hdmi, help = getString(R.string.inputs_in_bar), area = AREA_ALL))) +
+            listOf(R.string.bottom_row, R.string.section_clock_weather, R.string.section_screensaver).map(sectionRow) +
             group(R.string.group_tv) +
             sectionRow(R.string.section_remote_home) +
             Triple(R.string.lock_layout, rows[R.string.lock_layout]!!, RowStyle(R.drawable.ms_lock, help = getString(R.string.lock_note))) +
@@ -3018,7 +3479,7 @@ class MainActivity : Activity() {
     private class RowStyle(val icon: Int? = null, val sub: String? = null, val choices: List<Pair<String, Int?>>? = null,
                            val thumb: Pair<String, Boolean>? = null, val help: String? = null, val area: Int? = null,
                            val art: String? = null, val ext: Boolean = false, val header: Boolean = false, val hero: Boolean = false,
-                           val dim: String? = null)
+                           val dim: String? = null, val leading: View? = null)
 
     // Settings colours, one set for each surface (dark or light, solid or glass). Over glass the text is a little
     // stronger and has a soft shadow, as the wallpaper's colour shows through the panel. Focus is always the brightest.
@@ -3094,9 +3555,13 @@ class MainActivity : Activity() {
         val name = label(title, 16f).apply { setTextColor(restInk()); panelShadow() }
         val sub = style?.sub?.let { label(it, 13f).apply { setTextColor(valueInk()); panelShadow() } }
         val iconView = style?.icon?.let { icon(it, 24, iconInk(false)) }
+        val leadingView = style?.leading
         val line = LinearLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            leadingView?.let { addView(it, LinearLayout.LayoutParams(dp(46), dp(28)).apply { marginEnd = dp(14) }) }
             iconView?.let { addView(it, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(16) }) }
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -3145,10 +3610,12 @@ class MainActivity : Activity() {
         if (end.childCount > 0) line.addView(end, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(12) })
         return LinearLayout(this).apply {
             id = View.generateViewId()
+            clipChildren = false
+            clipToPadding = false
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(16), dp(if (stacked) 12 else 6), dp(16), dp(if (stacked) 14 else 6))
-            minimumHeight = dp(if (sub != null) 68 else 56)
+            minimumHeight = dp(if (sub != null || leadingView != null) 68 else 56)
             addView(line, LinearLayout.LayoutParams(MATCH_PARENT, wrap))
             below?.let { addView(it, LinearLayout.LayoutParams(MATCH_PARENT, wrap).apply { topMargin = dp(10); marginStart = if (iconView != null) dp(40) else 0 }) }
             setOnClickListener { action() }
@@ -3204,8 +3671,9 @@ class MainActivity : Activity() {
      * the brightest thing on the panel. Left and Right still step through them. Returns the view and its focus restyle.
      */
     private fun choices(options: List<Pair<String, Int?>>, picked: String, stacked: Boolean = false, dim: String? = null): Pair<View, (Boolean) -> Unit> {
+        val fontSize = if (options.size > 4) 12f else 14f
         val pills = options.map { (text, iconRes) ->
-            label(text, 14f).apply {
+            label(text, fontSize).apply {
                 if (text == dim) alpha = .35f // there but not available here (Clear on a video)
                 gravity = Gravity.CENTER
                 // Under the title the choices share the row's width, icon above name, so four of them still fit.
@@ -3247,14 +3715,17 @@ class MainActivity : Activity() {
 
     /** Choices drawn as small pictures of what they do ([OptionArt]), each with its name under it. */
     private fun artChoices(kind: String, options: List<Pair<String, Int?>>, picked: String): Pair<View, (Boolean) -> Unit> {
+        val textSize = if (options.size > 3) 11f else 13f
+        val artW = if (options.size > 3) dp(54) else dp(76)
+        val artH = if (options.size > 3) dp(32) else dp(42)
         val cells = options.mapIndexed { i, (text, _) ->
-            Triple(OptionArt(kind, i, resources.displayMetrics.density), label(text, 13f).apply { gravity = Gravity.CENTER; panelShadow() }, text == picked)
+            Triple(OptionArt(kind, i, resources.displayMetrics.density), label(text, textSize).apply { gravity = Gravity.CENTER; panelShadow() }, text == picked)
         }
         val box = LinearLayout(this).apply {
             for ((art, name, _) in cells) addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                addView(View(context).apply { background = art }, LinearLayout.LayoutParams(dp(76), dp(42)))
+                addView(View(context).apply { background = art }, LinearLayout.LayoutParams(artW, artH))
                 addView(name, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
@@ -3434,12 +3905,15 @@ class MainActivity : Activity() {
         (devices + inputs.filter { it.parentId == null }).filter { (it.parentId ?: it.id) !in audio }.map { input ->
             val port = input.parentId ?: input.id
             val named = input.parentId != null
-            val label = (if (named) input.loadLabel(this) else input.loadCustomLabel(this) ?: input.loadLabel(this)).toString()
+            val rawLabel = (if (named) input.loadLabel(this) else input.loadCustomLabel(this) ?: input.loadLabel(this)).toString()
+            val label = prefs.getString("input_name_$port", rawLabel) ?: rawLabel
+            val customIcon = prefs.getString("input_icon_$port", null)
+            val iconKey = customIcon ?: hdmiIcon(label, named)
             App(
                 HDMI + port,
                 label,
                 Intent(Intent.ACTION_VIEW, TvContract.buildChannelUriForPassthroughInput(port)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                getDrawable(HDMI_ICONS[hdmiIcon(label, named)]!!)!!,
+                getDrawable(HDMI_ICONS[iconKey] ?: R.drawable.ic_hdmi)!!,
                 offline = !named && tv.getInputState(port) != TvInputManager.INPUT_STATE_CONNECTED,
             )
         }.distinctBy { it.pkg }
@@ -3448,9 +3922,167 @@ class MainActivity : Activity() {
     }
 
     private val inputCallback = object : TvInputManager.TvInputCallback() {
-        override fun onInputAdded(id: String) = refreshApps()
-        override fun onInputRemoved(id: String) = refreshApps()
-        override fun onInputStateChanged(id: String, state: Int) = refreshApps()
+        override fun onInputAdded(id: String) { refreshApps(); renderInputsBar() }
+        override fun onInputRemoved(id: String) { refreshApps(); renderInputsBar() }
+        override fun onInputStateChanged(id: String, state: Int) { refreshApps(); renderInputsBar() }
+    }
+
+    private fun isColorInput(iconKey: String): Boolean =
+        iconKey == "wii" || iconKey == "wiimote" || iconKey == "freebox" || iconKey == "freebox_delta"
+
+    private fun renderInputsBar() {
+        val container = findViewById<LinearLayout>(R.id.inputsBar) ?: return
+        val inputsContainer = findViewById<LinearLayout>(R.id.inputsContainer)
+        container.removeAllViews()
+        val detected = hdmiInputs().map { it.pkg to it.label }
+        val inputs = TopInputManager.loadInputs(prefs, detected)
+        val visibleInputs = inputs.filter { !it.hidden }
+        inputsContainer?.visibility = if (visibleInputs.isEmpty()) View.GONE else View.VISIBLE
+
+        for (input in visibleInputs) {
+            val iconRes = HDMI_ICONS[input.icon] ?: R.drawable.ic_hdmi
+            val isColor = isColorInput(input.icon)
+            val iv = ImageView(this).apply {
+                id = View.generateViewId()
+                layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                    marginEnd = dp(8)
+                }
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+                setImageDrawable(getDrawable(iconRes))
+                if (!isColor) setColorFilter(iconInk) else colorFilter = null
+                isFocusable = true
+                isClickable = true
+                tag = "top_input:${input.id}:${input.icon}"
+                contentDescription = input.name
+                val ring = GradientDrawable().apply { shape = GradientDrawable.OVAL }
+                background = LayerDrawable(arrayOf(ColorDrawable(Color.TRANSPARENT), ring))
+                setOnFocusChangeListener { v, focused ->
+                    if (focused) lastTop = v
+                    showInputLabel(v, input.name, focused)
+                    (background as LayerDrawable).getDrawable(0).alpha = if (focused) 0 else 255
+                    val disc = glassActive()
+                    ring.setColor(if (!focused) 0 else if (disc) glassLook().tile(lit = true) else if (dark) DARK_CARD_LIT[0] else Color.WHITE)
+                    if (focused && disc) glass.add(v, v.width / 2f) else glass.remove(v)
+                    if (disc) glass.kick(260)
+                    if (!isColor) setColorFilter(if (focused) fg else iconInk) else colorFilter = null
+                    if (focused) {
+                        foreground = GoogleNeonDrawable(isCircle = true, density = resources.displayMetrics.density)
+                    } else {
+                        (foreground as? Animatable)?.stop()
+                        foreground = null
+                    }
+                    animate().scaleX(if (focused) 1.15f else 1f).scaleY(if (focused) 1.15f else 1f)
+                        .setDuration(160).setInterpolator(DECELERATE).start()
+                }
+                setOnClickListener {
+                    launchTopInput(input)
+                }
+                setOnLongClickListener {
+                    if (!holdFired) inputMenu(this, input)
+                    true
+                }
+            }
+            container.addView(iv)
+        }
+    }
+
+    private fun showInputLabel(v: View, name: String, focused: Boolean) {
+        val inputLabel = findViewById<FittingLabel>(R.id.inputLabel) ?: return
+        val container = findViewById<LinearLayout>(R.id.inputsBar) ?: return
+        if (focused) {
+            val place = {
+                inputLabel.text = name
+                inputLabel.box = v.width
+                val targetX = v.left + v.width / 2f - inputLabel.width / 2f
+                if (inputLabel.alpha > 0.1f) {
+                    inputLabel.animate().translationX(targetX).setDuration(160).setInterpolator(DECELERATE).start()
+                } else {
+                    inputLabel.translationX = targetX
+                }
+                inputLabel.setActive(true)
+                ink(inputLabel, iconInk, fade = false)
+            }
+            if (v.width > 0 && inputLabel.width > 0) place() else v.post { if (v.isFocused) place() }
+            inputLabel.animate().alpha(if (dark) 0.85f else 1f).setDuration(160).start()
+        } else {
+            ui.post {
+                val cur = currentFocus
+                if (cur == null || cur.parent !== container) {
+                    inputLabel.animate().alpha(0f).setDuration(120).start()
+                    inputLabel.setActive(false)
+                }
+            }
+        }
+    }
+
+    private fun launchTopInput(input: TopInput) {
+        if (input.port.isNotEmpty()) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, TvContract.buildChannelUriForPassthroughInput(input.port)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
+            } catch (_: Exception) {}
+        }
+        val matching = hdmiInputs().firstOrNull { it.label.equals(input.name, true) || it.pkg.contains(input.port) }
+        if (matching != null) {
+            try {
+                startActivity(matching.launch)
+                return
+            } catch (_: Exception) {}
+        }
+        toast(input.name)
+    }
+
+    private fun inputIconChoices(): List<Pair<String, String>> = listOf(
+        getString(R.string.input_icon_switch) to "nintendoswitch",
+        "Wii (Wiimote)" to "wii",
+        getString(R.string.input_icon_pc) to "pc",
+        "Freebox (Delta)" to "freebox",
+        getString(R.string.input_icon_playstation) to "playstation",
+        getString(R.string.input_icon_xbox) to "xbox",
+        getString(R.string.input_icon_appletv) to "appletv",
+        "Wii (Logo)" to "wii_text",
+        "Freebox (Logo)" to "freebox_logo",
+        getString(R.string.input_icon_hdmi) to "hdmi",
+    )
+
+    private fun inputMenu(v: View, input: TopInput) {
+        val detected = hdmiInputs().map { it.pkg to it.label }
+        val iconChoices = inputIconChoices()
+        holdMenu(v, listOf(
+            getString(R.string.choose_input_icon) to {
+                holdMenu(v, iconChoices.map { (label, key) ->
+                    label to {
+                        val inputs = TopInputManager.loadInputs(prefs, detected)
+                        val updated = inputs.map { if (it.id == input.id) it.copy(icon = key) else it }
+                        TopInputManager.saveInputs(prefs, updated)
+                        renderInputsBar()
+                    }
+                }, below = true)
+            },
+            getString(R.string.rename_category) to {
+                openLauncherSettings()
+                promptInputName(input.name) { newName ->
+                    val inputs = TopInputManager.loadInputs(prefs, detected)
+                    val updated = inputs.map { if (it.id == input.id) it.copy(name = newName) else it }
+                    TopInputManager.saveInputs(prefs, updated)
+                    renderInputsBar()
+                }
+            },
+            getString(R.string.add_input) to {
+                openLauncherSettings()
+                promptAddInput()
+            },
+            getString(R.string.delete_input) to {
+                val inputs = TopInputManager.loadInputs(prefs, detected)
+                val updated = inputs.filter { it.id != input.id }
+                TopInputManager.saveInputs(prefs, updated)
+                renderInputsBar()
+            },
+            getString(R.string.manage_inputs) to {
+                openLauncherSettings()
+                pickInputsSettings()
+            }
+        ), below = true)
     }
 
     /** HDMI inputs pinned to the home row by hand (hold OK in the Sources list): shown with or without a signal. */
@@ -3494,56 +4126,254 @@ class MainActivity : Activity() {
         }.then(byDefault))
     }
 
-    /**
-     * Every app, logo only, on the same 8-column grid as the Continue Watching cards (one card = two
-     * tiles), so 8 show at once and the row scrolls for the rest. All apps and Settings are in the top bar.
-     */
     private fun rowAlign() = prefs.getString("row_align", "left")!!.takeIf { it in ROW_ALIGN } ?: "left"
 
-    /**
-     * A row shorter than the screen sits left, centred or right. A longer row always starts at the left:
-     * centred, the scroller would push its first tiles out of reach.
-     */
+    private fun categoriesList(): List<Category> =
+        CategoryManager.loadCategories(prefs, getString(R.string.default_category_name), sortedApps().map { it.pkg })
+
+    private fun categoryFor(pkg: String): Category? =
+        categoriesList().firstOrNull { pkg in it.apps }
+
+    private fun findAppRowFor(v: View?): LinearLayout? {
+        val target = v ?: return null
+        return appRows.firstOrNull { it === target.parent }
+    }
+
     private fun alignRow() {
-        val content = appRow.parent as View
-        (content.layoutParams as FrameLayout.LayoutParams).gravity =
-            if (appTileCount() > rowTiles()) Gravity.START else ROW_ALIGN[rowAlign()]!!.second
-        content.requestLayout()
+        for (row in appRows) {
+            val content = row.parent as? View ?: continue
+            (content.layoutParams as FrameLayout.LayoutParams).gravity =
+                if (row.childCount > rowTiles()) Gravity.START else ROW_ALIGN[rowAlign()]!!.second
+            content.requestLayout()
+        }
     }
 
     private fun renderApps() {
         val focusedTag = currentFocus?.tag
-        // Rebuilds can happen in the background (an app or HDMI device added); only take focus if the row had it.
-        // First fill after a cold start: Android already gave the default focus to the top bar's first icon.
+        val wasAppFocus = appRows.any { it === currentFocus?.parent }
         val firstFill = appRow.childCount == 0 && currentFocus?.parent === wifi.parent
-        val takeFocus = currentFocus == null || currentFocus?.parent === appRow || firstFill
+        val takeFocus = currentFocus == null || wasAppFocus || firstFill
         val gap = dp(GRID_GAP)
-        val width = rowTileWidth()
-        val tileH = if (isBannerStyle(iconStyle())) width * 9 / 16 else (dp(76) * rowScale()).toInt() // 16:9 like a banner
-        // The row sits on the bottom of its space. A banner row is shorter, so lift it by half the difference: its
-        // centre stays where the card row's is, between the clock and Continue Watching. A taller row (Large,
-        // Largest) grows upward only, or it would cover Continue Watching's title.
-        findViewById<View>(R.id.appScroll).apply {
-            (layoutParams as LinearLayout.LayoutParams).bottomMargin = dp(-24) + maxOf(0, dp(76) - tileH) / 2
-            requestLayout()
-        }
-        appRow.removeAllViews()
+
+        val cats = categoriesList()
+        val showTitles = CategoryManager.showTitles(prefs)
+        val appsMap = sortedApps().associateBy { it.pkg }
         val hidden = rowHiddenSet()
-        val tiles = sortedApps().filter { inRow(it.pkg, hidden) }.map { appTile(it, labeled = false) }
-        if (tiles.isEmpty()) return showNames()
-        tiles.forEachIndexed { i, t ->
-            t.id = View.generateViewId()
-            appRow.addView(t, LinearLayout.LayoutParams(width, tileH).apply { if (i > 0) marginStart = gap })
-            val own = t.onFocusChangeListener
-            t.setOnFocusChangeListener { v, focused ->
-                own.onFocusChange(v, focused)
-                if (focused) lastApp = v
-                showRowLabel(v, focused)
+
+        appRowsContainer.removeAllViews()
+        appRowsBelowWatchContainer.removeAllViews()
+        appRows.clear()
+        appRowsAbove.clear()
+        appRowsBelow.clear()
+        appScrollers.clear()
+        appNameRows.clear()
+        appRowLabels.clear()
+        categoryTitleViews.clear()
+
+        var firstFocusedView: View? = null
+
+        val catsAbove = cats.filter { !it.belowWatch }
+        val catsBelow = cats.filter { it.belowWatch }
+
+        fun renderCategoryItem(cat: Category, groupIndex: Int, isBelowGroup: Boolean, targetContainer: LinearLayout, targetList: MutableList<LinearLayout>) {
+            val catPkgs = if (cat.id == CategoryManager.DEFAULT_ID && !prefs.contains(CategoryManager.PREF_CATEGORIES)) {
+                sortedApps().filter { inRow(it.pkg, hidden) }.map { it.pkg }
+            } else {
+                cat.apps.filter { it in appsMap }
+            }
+            if (catPkgs.isEmpty() && cats.size > 1) return
+
+            val effectiveSize = if (cat.size in ROW_SIZES) cat.size else rowSize()
+            val catAcross = ROW_SIZES.getValue(effectiveSize).second
+            val width = rowTileWidth(catAcross)
+            val effectiveStyle = if (cat.iconStyle in ICON_STYLES) cat.iconStyle else iconStyle()
+            val tileH = if (isBannerStyle(effectiveStyle)) width * 9 / 16 else (dp(76) * rowScale(catAcross)).toInt()
+
+            val spacing = rowSpacingPx()
+            val isFirstInGroup = groupIndex == 0
+            val isFirstOverall = !isBelowGroup && isFirstInGroup
+
+            if (showTitles) {
+                val titleView = TextView(this).apply {
+                    id = View.generateViewId()
+                    text = cat.name.uppercase()
+                    textSize = 12f
+                    letterSpacing = 0.1f
+                    setTypeface(typeface, Typeface.BOLD)
+                    alpha = 0.75f
+                    val topM = if (isFirstOverall) 0
+                        else if (isBelowGroup && isFirstInGroup) {
+                            if (watchScroll.visibility == View.VISIBLE) spacing + dp(12) else spacing
+                        } else spacing
+                    layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                        setMargins(0, topM, 0, dp(2))
+                    }
+                    categoryTitleViews.add(this)
+                }
+                targetContainer.addView(titleView)
+            }
+
+            val scroller = SnapScrollView(this, null).apply {
+                id = if (isFirstOverall) R.id.appScroll else View.generateViewId()
+                clipToPadding = false
+                setPadding(dp(16), dp(24), dp(16), dp(24))
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+                val bottomPull = if (rowNames() == "never") dp(-24) else dp(-36)
+                layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                    marginStart = dp(-16)
+                    marginEnd = dp(-16)
+                    topMargin = if (showTitles) dp(-24)
+                        else if (isFirstOverall) dp(-24)
+                        else if (isBelowGroup && isFirstInGroup) {
+                            dp(-24) + (if (watchScroll.visibility == View.VISIBLE) spacing + dp(12) else spacing)
+                        } else dp(-24) + spacing
+                    bottomMargin = bottomPull + maxOf(0, dp(76) - tileH) / 2
+                }
+                setOnScrollChangeListener { _, _, _, _, _ -> glass.kick(150) }
+            }
+            appScrollers.add(scroller)
+
+            val content = LinearLayout(this).apply {
+                layoutParams = FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                    gravity = if (catPkgs.size > rowTiles()) Gravity.START else ROW_ALIGN[rowAlign()]!!.second
+                }
+                clipChildren = false
+                orientation = LinearLayout.VERTICAL
+            }
+
+            val thisRow = LinearLayout(this).apply {
+                id = if (isFirstOverall) R.id.appRow else View.generateViewId()
+                layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
+                clipChildren = false
+                orientation = LinearLayout.HORIZONTAL
+            }
+            targetList.add(thisRow)
+            appRows.add(thisRow)
+            if (isFirstOverall || appRows.size == 1) appRow = thisRow
+
+            val thisLabel = FittingLabel(this, null).apply {
+                id = if (isFirstOverall) R.id.rowLabel else View.generateViewId()
+                layoutParams = LinearLayout.LayoutParams(dp(200), dp(18)).apply {
+                    topMargin = dp(4)
+                }
+                alpha = 0f
+                gravity = Gravity.CENTER
+                maxLines = 1
+                textSize = 12f
+                visibility = if (rowNames() == "never") View.GONE else View.VISIBLE
+            }
+            appRowLabels.add(thisLabel)
+
+            val thisNameRow = LinearLayout(this).apply {
+                id = if (isFirstOverall) R.id.nameRow else View.generateViewId()
+                layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, dp(18)).apply {
+                    topMargin = dp(4)
+                }
+                orientation = LinearLayout.HORIZONTAL
+                visibility = View.GONE
+            }
+            appNameRows.add(thisNameRow)
+
+            content.addView(thisRow)
+            content.addView(thisLabel)
+            content.addView(thisNameRow)
+            scroller.addView(content)
+            targetContainer.addView(scroller)
+
+            // Gear button at index 0 of row (Projectivy style)
+            val gearW = minOf(tileH, dp(54))
+            val gearBtn = ImageView(this).apply {
+                id = View.generateViewId()
+                layoutParams = LinearLayout.LayoutParams(gearW, tileH).apply {
+                    marginEnd = gap
+                }
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                setImageDrawable(getDrawable(R.drawable.ic_settings))
+                setColorFilter(appsInk)
+                visibility = View.GONE // Hidden by default, appears only when navigating left from first app
+                isFocusable = true
+                isClickable = true
+                tag = "category_gear:${cat.id}"
+                contentDescription = "${getString(R.string.configure_row)} · ${cat.name}"
+                val shape = GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(Color.TRANSPARENT)
+                }
+                background = LayerDrawable(arrayOf(ColorDrawable(Color.TRANSPARENT), shape))
+                setOnFocusChangeListener { v, focused ->
+                    if (!focused) {
+                        visibility = View.GONE
+                        shape.setColor(Color.TRANSPARENT)
+                    } else {
+                        val disc = glassActive()
+                        shape.setColor(if (disc) glassLook().tile(lit = true) else if (dark) DARK_CARD_LIT[0] else Color.WHITE)
+                        if (disc) glass.add(v, dp(10).toFloat()) else glass.remove(v)
+                        if (disc) glass.kick(260)
+                    }
+                    (background as LayerDrawable).getDrawable(0).alpha = if (focused) 0 else 255
+                    setColorFilter(if (focused) fg else appsInk)
+                    if (focused) {
+                        foreground = GoogleNeonDrawable(radius = dp(10).toFloat(), density = resources.displayMetrics.density)
+                    } else {
+                        (foreground as? Animatable)?.stop()
+                        foreground = null
+                    }
+                    animate().scaleX(if (focused) 1.10f else 1f).scaleY(if (focused) 1.10f else 1f)
+                        .setDuration(160).setInterpolator(DECELERATE).start()
+                    showRowLabel(this, focused)
+                    if (focused) scrollToView(this)
+                }
+                setOnClickListener {
+                    openLauncherSettings()
+                    manageSingleCategory(cat, fromRow = true)
+                }
+            }
+            thisRow.addView(gearBtn)
+
+            catPkgs.mapNotNull { appsMap[it] }.forEachIndexed { i, a ->
+                val t = appTile(a, labeled = false, across = catAcross, style = effectiveStyle)
+                t.id = View.generateViewId()
+                thisRow.addView(t, LinearLayout.LayoutParams(width, tileH).apply { marginEnd = gap })
+                val own = t.onFocusChangeListener
+                t.setOnFocusChangeListener { v, focused ->
+                    own.onFocusChange(v, focused)
+                    if (focused) {
+                        lastApp = v
+                        scrollToView(v)
+                    }
+                    showRowLabel(v, focused)
+                }
+                if (focusedTag != null && t.tag == focusedTag) firstFocusedView = t
+                if (firstFocusedView == null && isFirstOverall && i == 0) firstFocusedView = t
             }
         }
+
+        catsAbove.forEachIndexed { idx, cat ->
+            renderCategoryItem(cat, idx, isBelowGroup = false, appRowsContainer, appRowsAbove)
+        }
+        catsBelow.forEachIndexed { idx, cat ->
+            renderCategoryItem(cat, idx, isBelowGroup = true, appRowsBelowWatchContainer, appRowsBelow)
+        }
+
+        if (appRows.isEmpty()) {
+            val emptyScroller = SnapScrollView(this, null).apply {
+                id = R.id.appScroll
+                layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
+            }
+            val emptyRow = LinearLayout(this).apply { id = R.id.appRow }
+            appRow = emptyRow
+            appRows.add(emptyRow)
+            appRowsAbove.add(emptyRow)
+            appScrollers.add(emptyScroller)
+            appRowsContainer.addView(emptyScroller)
+        }
+
         showNames()
         alignRow()
-        if (takeFocus) (tiles.firstOrNull { it.tag == focusedTag } ?: tiles[0]).requestFocus()
+        findViewById<TextView>(R.id.watchTitle)?.let { (it.layoutParams as? LinearLayout.LayoutParams)?.topMargin = maxOf(dp(12), rowSpacingPx() + dp(12)) }
+        if (takeFocus) (firstFocusedView ?: appRows.firstOrNull()?.getChildAt(1) ?: appRows.firstOrNull()?.getChildAt(0))?.requestFocus()
         if (!prefs.getBoolean("tip_move", false)) {
             prefs.edit().putBoolean("tip_move", true).apply()
             toast(getString(R.string.tip_move), long = true)
@@ -3561,6 +4391,15 @@ class MainActivity : Activity() {
     /** A brand or app colour made deep enough to carry a white mark. */
     private fun deepen(c: Int) = Color.rgb((Color.red(c) * 0.6f).toInt(), (Color.green(c) * 0.6f).toInt(), (Color.blue(c) * 0.6f).toInt())
 
+    private fun rowSpacing() = prefs.getString("row_spacing", "normal")?.takeIf { it in ROW_SPACINGS } ?: "normal"
+    private fun rowSpacingPx(): Int = when (rowSpacing()) {
+        "very_compact" -> dp(-8)
+        "compact" -> dp(-2)
+        "spacious" -> dp(20)
+        "wide" -> dp(36)
+        else -> dp(8)
+    }
+
     /** "standard", "large" or "largest": how big the home row's tiles and banners are. */
     private fun rowSize() = prefs.getString("row_size", "standard")!!.takeIf { it in ROW_SIZES } ?: "standard"
 
@@ -3570,21 +4409,21 @@ class MainActivity : Activity() {
     private fun rowTileWidth(across: Int = rowTiles()) = (resources.displayMetrics.widthPixels - dp(96) - dp(GRID_GAP) * (across - 1)) / across
 
     /** How much bigger the row's tiles are than at Standard size: their height and the space around the mark grow with it. */
-    private fun rowScale() = rowTileWidth().toFloat() / rowTileWidth(ROW_TILES)
+    private fun rowScale(across: Int = rowTiles()) = rowTileWidth(across).toFloat() / rowTileWidth(ROW_TILES)
 
     /**
      * Apple TV style: the app's own banner fills the tile, rounded. Only when the banner is at least as wide as a
      * Standard-size tile, or it would be upscaled and soft (4K); null then, and the tile shows the app's mark as usual.
      * Large and Largest stretch a banner of that width a little (most are 320 px, Largest is ~400 px on a 1080p TV).
      */
-    private fun bannerTile(a: App): View? {
+    private fun bannerTile(a: App, across: Int = rowTiles(), greyStyle: Boolean = (iconStyle() == "bannermono")): View? {
         if (a.pkg.startsWith(HDMI)) return null
         val banner = try {
             packageManager.getActivityBanner(a.launch)
         } catch (e: Exception) {
             null
         } ?: return null
-        val w = rowTileWidth()
+        val w = rowTileWidth(across)
         if (banner.intrinsicWidth in 1 until rowTileWidth(ROW_TILES)) return null
         // Drawn once, centre-cropped, at the tile's exact size: a row of banners then costs ~80 KB each, not the
         // banner's own size, and the full-size banner isn't kept.
@@ -3599,7 +4438,7 @@ class MainActivity : Activity() {
         banner.setBounds((w - dw) / 2, (h - dh) / 2, (w - dw) / 2 + dw, (h - dh) / 2 + dh)
         banner.draw(Canvas(bmp))
         // Monochrome banner: grey at rest, in colour while selected, as the marks brighten in dark mode.
-        val grey = iconStyle() == "bannermono"
+        val grey = greyStyle
         val rest = if (dark) 0.8f else 1f
         val pic = ImageView(this).apply {
             setImageBitmap(bmp)
@@ -3615,7 +4454,7 @@ class MainActivity : Activity() {
             tag = a.pkg
             setOnClickListener { launch(a) }
         }
-        style(col, dp(8), card = false, lift = 1.12f) { focused ->
+        style(col, tileRadius(), card = false, lift = 1.12f) { focused ->
             if (!grey) dim.animate().alpha(if (focused) 0f else BANNER_DIM).setDuration(160).start()
             if (!grey) return@style
             pic.colorFilter = if (focused) null else GREYSCALE
@@ -3625,32 +4464,33 @@ class MainActivity : Activity() {
     }
 
     /** The home row shows marks only by default (see rowNames); the All apps grid always labels them. */
-    private fun appTile(a: App, labeled: Boolean = true): View {
-        if (!labeled && isBannerStyle(iconStyle())) bannerTile(a)?.let { it.contentDescription = a.label; return it }
+    private fun appTile(a: App, labeled: Boolean = true, across: Int = rowTiles(), style: String = iconStyle()): View {
+        if (!labeled && isBannerStyle(style)) bannerTile(a, across, style == "bannermono")?.let { it.contentDescription = a.label; return it }
         val logo = LOGOS[a.pkg]
         val custom = customIcon(a.pkg)
         val name = a.label.takeIf { labeled }
         // Colour mode keeps the same marks, tinted with the brand colour (or the colour the app's icon is mostly).
-        val colour = colourIcons()
+        val colour = if (style == "colour") true else if (style == "mono") false else colourIcons()
         // A banner style, an app with no banner: its own colour behind its mark in white, so the row doesn't mix pictures
         // and grey squares. HDMI tiles keep the plain mark.
-        val onColour = !labeled && isBannerStyle(iconStyle()) && !a.pkg.startsWith(HDMI)
+        val onColour = !labeled && isBannerStyle(style) && !a.pkg.startsWith(HDMI)
+        val s = rowScale(across)
         val t = when {
-            custom != null -> tile(name, custom, false, a.pkg) { launch(a) }
+            custom != null -> tile(name, custom, false, a.pkg, scale = s, style = style) { launch(a) }
             a.pkg.startsWith(HDMI) -> tile(name, a.icon, true, a.pkg,
-                tint = BRAND_COLOURS[hdmiIcon(a.label, true)]?.takeIf { colour }) { launch(a) }
+                tint = BRAND_COLOURS[hdmiIcon(a.label, true)]?.takeIf { colour }, scale = s, style = style) { launch(a) }
             logo != null -> tile(name.takeIf { !logo.second }, getDrawable(logo.first)!!, true, a.pkg,
-                wordmarkInset = if (!logo.second) null else if (labeled) dp(28) else (dp(14) * rowScale()).toInt(),
-                tint = if (onColour && BRAND_COLOURS[a.pkg] != null) Color.WHITE else BRAND_COLOURS[a.pkg]?.takeIf { colour }) { launch(a) }
+                wordmarkInset = if (!logo.second) null else if (labeled) dp(28) else (dp(14) * s).toInt(),
+                tint = if (onColour && BRAND_COLOURS[a.pkg] != null) Color.WHITE else BRAND_COLOURS[a.pkg]?.takeIf { colour }, scale = s, style = style) { launch(a) }
                 .also { if (onColour) BRAND_COLOURS[a.pkg]?.let { c -> it.backgroundTintList = ColorStateList.valueOf(deepen(c)) } }
             else -> cachedGlyph(a)?.let { g ->
                 val accent = cachedAccent(a)
-                tile(name, g, true, a.pkg, tint = if (onColour && accent != null) Color.WHITE else if (colour) accent else null) { launch(a) }
+                tile(name, g, true, a.pkg, tint = if (onColour && accent != null) Color.WHITE else if (colour) accent else null, scale = s, style = style) { launch(a) }
                     .also { if (onColour && accent != null) it.backgroundTintList = ColorStateList.valueOf(deepen(accent)) }
             }
-                ?: if (colour || onColour) tile(name, a.icon.constantState?.newDrawable(resources) ?: a.icon, false, a.pkg) { launch(a) }
+                ?: if (colour || onColour) tile(name, a.icon.constantState?.newDrawable(resources) ?: a.icon, false, a.pkg, scale = s, style = style) { launch(a) }
                 // A copy: greying the shared icon itself would keep it grey after switching to colour.
-                else tile(name, (a.icon.constantState?.newDrawable(resources) ?: a.icon).mutate().apply { colorFilter = GREYSCALE }, false, a.pkg) { launch(a) }
+                else tile(name, (a.icon.constantState?.newDrawable(resources) ?: a.icon).mutate().apply { colorFilter = GREYSCALE }, false, a.pkg, scale = s, style = style) { launch(a) }
         }
         t.contentDescription = a.label
         return t
@@ -3658,47 +4498,137 @@ class MainActivity : Activity() {
 
     /** "App names: Always": a name under every tile, same width and gap as the tiles, so they line up. */
     private fun showNames() {
-        val row = findViewById<LinearLayout>(R.id.nameRow)
         val always = rowNames() == "always"
-        row.visibility = if (always) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.rowLabel).visibility = if (always) View.GONE else View.VISIBLE
-        row.removeAllViews()
-        if (!always) return
-        for (i in 0 until appRow.childCount) {
-            val t = appRow.getChildAt(i)
-            row.addView(fittingLabel(t.contentDescription.toString(), 13f).apply {
-                gravity = Gravity.CENTER
-                alpha = if (dark) 0.85f else 1f
-                ink(this, appsInk)
-            }, LinearLayout.LayoutParams(t.layoutParams as LinearLayout.LayoutParams).apply { height = MATCH_PARENT })
+        for (i in appRows.indices) {
+            val row = appRows[i]
+            val nameRow = appNameRows.getOrNull(i) ?: continue
+            val rowLabel = appRowLabels.getOrNull(i) ?: continue
+            nameRow.visibility = if (always) View.VISIBLE else View.GONE
+            rowLabel.visibility = if (always) View.GONE else View.VISIBLE
+            nameRow.removeAllViews()
+            if (!always) continue
+            for (j in 0 until row.childCount) {
+                val t = row.getChildAt(j)
+                if (t.tag?.toString()?.startsWith("category_gear:") == true) continue
+                nameRow.addView(fittingLabel(t.contentDescription?.toString() ?: "", 13f).apply {
+                    gravity = Gravity.CENTER
+                    alpha = if (dark) 0.85f else 1f
+                    ink(this, appsInk)
+                }, LinearLayout.LayoutParams(t.layoutParams as LinearLayout.LayoutParams).apply { height = MATCH_PARENT })
+            }
         }
-        row.post { fitInk() } // measured again over the names' own place on the wallpaper
+        appNameRows.firstOrNull()?.post { fitInk() }
+    }
+
+    /** Fades out scrolled rows, titles and continue watching smoothly only as they reach the top bar */
+    private fun updateHomeScrollFade(scrollY: Int) {
+        if (scrollY <= 0) {
+            appScrollers.forEach { it.alpha = 1f }
+            if (CategoryManager.showTitles(prefs)) {
+                val focusedRow = currentFocus?.let { findAppRowFor(it) }
+                categoryTitleViews.forEachIndexed { i, titleView ->
+                    val isFocused = focusedRow != null && focusedRow === appRows.getOrNull(i)
+                    titleView.alpha = if (isFocused) 0f else 0.75f
+                }
+            }
+            if (watchScroll.visibility == View.VISIBLE) {
+                watchScroll.alpha = 1f
+                watchTitle.alpha = titleAlpha
+            }
+            return
+        }
+
+        appScrollers.forEach { scroller ->
+            val parentTop = (scroller.parent as? View)?.top ?: 0
+            val topInViewport = (parentTop + scroller.top) - scrollY
+            val fade = (topInViewport.toFloat() / dp(40)).coerceIn(0f, 1f)
+            scroller.alpha = fade
+        }
+        if (CategoryManager.showTitles(prefs)) {
+            val focusedRow = currentFocus?.let { findAppRowFor(it) }
+            categoryTitleViews.forEachIndexed { i, titleView ->
+                val parentTop = (titleView.parent as? View)?.top ?: 0
+                val topInViewport = (parentTop + titleView.top) - scrollY
+                val isFocused = focusedRow != null && focusedRow === appRows.getOrNull(i)
+                val baseAlpha = if (isFocused) 0f else 0.75f
+                val titleFade = (topInViewport.toFloat() / dp(30)).coerceIn(0f, 1f)
+                titleView.alpha = baseAlpha * titleFade
+            }
+        }
+        if (watchScroll.visibility == View.VISIBLE) {
+            val watchTopInViewport = watchScroll.top - scrollY
+            val watchFade = (watchTopInViewport.toFloat() / dp(40)).coerceIn(0f, 1f)
+            watchScroll.alpha = watchFade
+            val watchTitleTopInViewport = watchTitle.top - scrollY
+            val titleFade = (watchTitleTopInViewport.toFloat() / dp(30)).coerceIn(0f, 1f)
+            watchTitle.alpha = titleAlpha * titleFade
+        }
     }
 
     /** Slides the shared name label under the focused row tile; fades it out once focus leaves the row. */
     private fun showRowLabel(v: View, focused: Boolean) {
-        val label = findViewById<FittingLabel>(R.id.rowLabel)
-        if (rowNames() == "always") { // the names under every tile: only the selected tile's name scrolls, if it is too wide
-            val names = findViewById<LinearLayout>(R.id.nameRow)
-            val at = appRow.indexOfChild(v)
+        val row = findAppRowFor(v) ?: appRow
+        val rowIdx = appRows.indexOf(row)
+        val label = if (rowIdx >= 0 && rowIdx < appRowLabels.size) appRowLabels[rowIdx] else findViewById<FittingLabel>(R.id.rowLabel)
+        val names = if (rowIdx >= 0 && rowIdx < appNameRows.size) appNameRows[rowIdx] else findViewById<LinearLayout>(R.id.nameRow)
+
+        if (CategoryManager.showTitles(prefs)) {
+            val homeScroll = findViewById<ScrollView>(R.id.homeVerticalScroll)
+            val scrollY = homeScroll?.scrollY ?: 0
+            if (focused && rowIdx >= 0) {
+                categoryTitleViews.forEachIndexed { i, titleView ->
+                    val parentTop = (titleView.parent as? View)?.top ?: 0
+                    val topInViewport = (parentTop + titleView.top) - scrollY
+                    val scrollFade = ((topInViewport + dp(20)).toFloat() / dp(40)).coerceIn(0f, 1f)
+                    val targetAlpha = if (i == rowIdx) 0f else 0.75f * scrollFade
+                    if (titleView.alpha != targetAlpha) {
+                        titleView.animate().alpha(targetAlpha).setDuration(160).start()
+                    }
+                }
+            } else {
+                ui.post {
+                    val cur = currentFocus
+                    if (cur == null || findAppRowFor(cur) == null) {
+                        categoryTitleViews.forEach { titleView ->
+                            val parentTop = (titleView.parent as? View)?.top ?: 0
+                            val topInViewport = (parentTop + titleView.top) - scrollY
+                            val scrollFade = ((topInViewport + dp(20)).toFloat() / dp(40)).coerceIn(0f, 1f)
+                            val targetAlpha = 0.75f * scrollFade
+                            if (titleView.alpha != targetAlpha) {
+                                titleView.animate().alpha(targetAlpha).setDuration(160).start()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (v.tag?.toString()?.startsWith("category_gear:") == true) {
+            label.animate().alpha(0f).setDuration(120).start()
+            label.setActive(false)
+            if (rowNames() == "always") {
+                for (i in 0 until names.childCount) (names.getChildAt(i) as? FittingLabel)?.setActive(false)
+            }
+            return
+        }
+
+        if (rowNames() == "always") {
+            val at = row.indexOfChild(v)
             for (i in 0 until names.childCount) (names.getChildAt(i) as? FittingLabel)?.setActive(focused && !editing && i == at)
         }
         if (focused && !editing && rowNames() == "focus") {
-            // Name and place change together, or moving quickly shows the next name under the previous tile for a frame.
-            // Posted only on first render, when focus lands before layout and every width is still 0. A post that runs
-            // after focus moved on is skipped, or it would show this old name while a newer tile is selected.
             val place = {
                 label.text = v.contentDescription
-                label.box = v.width // the name stays inside its tile: when it is wider it scrolls
+                label.box = v.width
                 label.translationX = v.left + v.width / 2f - label.width / 2f
                 label.setActive(true)
-                ink(label, appsInk) // the row's colour (see fitInk): one colour, not a new one under each tile
+                ink(label, appsInk, strong = true)
             }
             if (v.width > 0 && label.width > 0) place() else v.post { if (v.isFocused) place() }
             label.animate().alpha(if (dark) 0.85f else 1f).setDuration(160).start()
         } else {
             ui.post {
-                if (currentFocus?.parent !== appRow || editing) {
+                if (currentFocus?.parent !== row || editing) {
                     label.animate().alpha(0f).setDuration(120).start()
                     label.setActive(false)
                 }
@@ -3707,7 +4637,7 @@ class MainActivity : Activity() {
     }
 
     /** White card: logo on top, name underneath. With no label the mark sits alone, centred, at one size. */
-    private fun tile(label: String?, icon: Drawable, mono: Boolean, tag: String, wordmarkInset: Int? = null, tint: Int? = null, onClick: () -> Unit): View {
+    private fun tile(label: String?, icon: Drawable, mono: Boolean, tag: String, wordmarkInset: Int? = null, tint: Int? = null, scale: Float = rowScale(), style: String = iconStyle(), onClick: () -> Unit): View {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -3728,7 +4658,7 @@ class MainActivity : Activity() {
         val restText = if (dark) 0.65f else 1f
         img.alpha = restLogo
         text?.alpha = restText
-        style(col, dp(8), card = true) { focused ->
+        style(col, tileRadius(), card = true) { focused ->
             text?.setActive(focused) // a name too wide for the tile scrolls while it is selected
             if (!dark) return@style
             img.animate().alpha(if (focused) 1f else restLogo).setDuration(160).start()
@@ -3741,8 +4671,8 @@ class MainActivity : Activity() {
                 img.scaleType = ImageView.ScaleType.CENTER_CROP
                 img.setPadding(wordmarkInset, 0, wordmarkInset, 0)
             } else {
-                val s = rowScale() // only home row tiles have no name: All apps keeps its one size
-                val v = ((if (isBannerStyle(iconStyle())) dp(8) else dp(20)) * s).toInt() // banner rows are shorter
+                val s = scale // only home row tiles have no name: All apps keeps its one size
+                val v = ((if (isBannerStyle(style)) dp(8) else dp(20)) * s).toInt() // banner rows are shorter
                 val h = (dp(16) * s).toInt()
                 img.setPadding(h, v, h, v)
             }
@@ -3840,6 +4770,11 @@ class MainActivity : Activity() {
      * listener in style() is a fallback for remotes that send no repeats. [holdFired] stops both firing.
      */
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+        pokeIdle()
+        if (clean) { // photo-frame mode: any button brings the home screen back
+            if (e.action == KeyEvent.ACTION_DOWN) setClean(false)
+            return true
+        }
         if (wallPreview != null) { // a picked wallpaper shown whole: any button brings the panel back
             if (e.action == KeyEvent.ACTION_UP) endWallPreview()
             return true
@@ -3874,38 +4809,182 @@ class MainActivity : Activity() {
         return super.dispatchKeyEvent(e)
     }
 
+    /** Smoothly scrolls the home vertical scroll view so [v] is centered and visible. */
+    private fun scrollToView(v: View) {
+        val scroll = findViewById<ScrollView>(R.id.homeVerticalScroll) ?: return
+        v.post {
+            if (!v.isAttachedToWindow || !scroll.isAttachedToWindow) return@post
+            if (appRows.firstOrNull() === v.parent) {
+                scroll.smoothScrollTo(0, 0)
+                glass.kick(200)
+                return@post
+            }
+            val locV = IntArray(2)
+            val locS = IntArray(2)
+            v.getLocationInWindow(locV)
+            scroll.getLocationInWindow(locS)
+            val currentYInViewport = locV[1] - locS[1]
+            val diff = (currentYInViewport + v.height / 2) - scroll.height / 2
+            val maxScroll = ((scroll.getChildAt(0)?.height ?: 0) - scroll.height).coerceAtLeast(0)
+            val targetY = (scroll.scrollY + diff).coerceIn(0, maxScroll)
+            scroll.smoothScrollTo(0, targetY)
+            glass.kick(200)
+        }
+    }
+
     /**
-     * The home screen is three rows: top bar, apps, Continue Watching. Left/Right stay inside a row and
-     * stop at its ends; Up/Down move between rows and land where you last were in that row, not on
-     * whatever happens to sit nearest on screen. Returns the view to focus (itself = stay), or null to
-     * let Android handle the key.
+     * The home screen navigation across top bar, category app rows, and Continue Watching.
      */
     private fun homeNav(v: View, key: Int): View? {
         fun alive(x: View?) = x?.takeIf { it.isAttachedToWindow }
-        val apps = alive(lastApp)?.takeIf { it.parent === appRow } ?: appRow.getChildAt(0)
+        val apps = alive(lastApp)?.takeIf { appRows.any { row -> row === it.parent } } ?: appRows.firstOrNull()?.getChildAt(1) ?: appRows.firstOrNull()?.getChildAt(0)
         val cards = if (watchScroll.visibility != View.VISIBLE) null
             else alive(lastCard) ?: (watchRow.getChildAt(0) as? ViewGroup)?.getChildAt(0)
         val top = alive(lastTop) ?: findViewById(R.id.launcherSettings)
+        val currentRow = findAppRowFor(v)
+        val inputsContainer = findViewById<LinearLayout>(R.id.inputsBar)
+
         return when {
-            v.parent === wifi.parent -> when (key) { // top bar
-                KeyEvent.KEYCODE_DPAD_DOWN -> apps ?: cards ?: v // the apps row can be empty (all hidden)
+            v.parent === inputsContainer -> {
+                val inputIdx = inputsContainer?.indexOfChild(v) ?: 0
+                val totalInputs = inputsContainer?.childCount ?: 0
+                when (key) {
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        val target = apps ?: cards ?: v
+                        scrollToView(target)
+                        target
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> v
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (inputIdx == 0) v else null
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (inputIdx < totalInputs - 1) null
+                        else {
+                            shownTop().mapNotNull { findViewById<View>(it) }.firstOrNull { it.visibility == View.VISIBLE } ?: v
+                        }
+                    }
+                    else -> null
+                }
+            }
+            v.parent === wifi.parent -> when (key) { // top bar system icons
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    val target = apps ?: cards ?: v
+                    scrollToView(target)
+                    target
+                }
                 KeyEvent.KEYCODE_DPAD_UP -> v
-                KeyEvent.KEYCODE_DPAD_LEFT -> if (v.id == shownTop().first()) v else null
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    if (v.id == shownTop().first()) {
+                        if (inputsContainer != null && inputsContainer.childCount > 0) {
+                            inputsContainer.getChildAt(inputsContainer.childCount - 1)
+                        } else v
+                    } else null
+                }
                 KeyEvent.KEYCODE_DPAD_RIGHT -> if (v.id == shownTop().last()) v else null
                 else -> null
             }
-            v.parent === appRow -> when (key) {
-                KeyEvent.KEYCODE_DPAD_UP -> top
-                KeyEvent.KEYCODE_DPAD_DOWN -> cards ?: v
-                KeyEvent.KEYCODE_DPAD_LEFT -> if (appRow.indexOfChild(v) == 0) v else null
-                KeyEvent.KEYCODE_DPAD_RIGHT -> if (appRow.indexOfChild(v) == appRow.childCount - 1) v else null
-                else -> null
+            currentRow != null -> {
+                val isBelow = appRowsBelow.contains(currentRow)
+                val currentList = if (isBelow) appRowsBelow else appRowsAbove
+                val rowIdxInGroup = currentList.indexOf(currentRow)
+                val globalRowIdx = appRows.indexOf(currentRow)
+                val childIdx = currentRow.indexOfChild(v)
+                when (key) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        if (rowIdxInGroup > 0) {
+                            val prevRow = currentList[rowIdxInGroup - 1]
+                            val targetChildIdx = if (childIdx == 0) 1 else childIdx.coerceIn(1, (prevRow.childCount - 1).coerceAtLeast(0))
+                            val target = prevRow.getChildAt(targetChildIdx) ?: top
+                            scrollToView(target)
+                            target
+                        } else if (isBelow) {
+                            if (cards != null) {
+                                scrollToView(cards)
+                                cards
+                            } else if (appRowsAbove.isNotEmpty()) {
+                                val prevRow = appRowsAbove.last()
+                                val targetChildIdx = if (childIdx == 0) 1 else childIdx.coerceIn(1, (prevRow.childCount - 1).coerceAtLeast(0))
+                                val target = prevRow.getChildAt(targetChildIdx) ?: top
+                                scrollToView(target)
+                                target
+                            } else {
+                                val scroll = findViewById<ScrollView>(R.id.homeVerticalScroll)
+                                scroll?.smoothScrollTo(0, 0)
+                                top
+                            }
+                        } else {
+                            val scroll = findViewById<ScrollView>(R.id.homeVerticalScroll)
+                            scroll?.smoothScrollTo(0, 0)
+                            top
+                        }
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (rowIdxInGroup < currentList.size - 1) {
+                            val nextRow = currentList[rowIdxInGroup + 1]
+                            val targetChildIdx = if (childIdx == 0) 1 else childIdx.coerceIn(1, (nextRow.childCount - 1).coerceAtLeast(0))
+                            val target = nextRow.getChildAt(targetChildIdx) ?: v
+                            scrollToView(target)
+                            target
+                        } else if (!isBelow) {
+                            if (cards != null) {
+                                scrollToView(cards)
+                                cards
+                            } else if (appRowsBelow.isNotEmpty()) {
+                                val nextRow = appRowsBelow.first()
+                                val targetChildIdx = if (childIdx == 0) 1 else childIdx.coerceIn(1, (nextRow.childCount - 1).coerceAtLeast(0))
+                                val target = nextRow.getChildAt(targetChildIdx) ?: v
+                                scrollToView(target)
+                                target
+                            } else {
+                                v
+                            }
+                        } else {
+                            v
+                        }
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        if (childIdx == 1) {
+                            val gear = currentRow.getChildAt(0)
+                            if (gear != null) {
+                                gear.visibility = View.VISIBLE
+                                val scroller = appScrollers.getOrNull(globalRowIdx)
+                                scroller?.smoothScrollTo(0, 0)
+                                gear
+                            } else v
+                        } else if (childIdx == 0) {
+                            v
+                        } else null
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (childIdx == 0) {
+                            if (currentRow.childCount > 1) currentRow.getChildAt(1) else v
+                        } else if (childIdx == currentRow.childCount - 1) {
+                            v
+                        } else null
+                    }
+                    else -> null
+                }
             }
             v.getTag(R.id.watchRow) is Prog -> {
                 val i = watchRow.indexOfChild(v.parent as View)
+                val lastAppAbove = appRowsAbove.lastOrNull { it.childCount > 0 }
+                val firstAppBelow = appRowsBelow.firstOrNull { it.childCount > 0 }
                 when (key) {
-                    KeyEvent.KEYCODE_DPAD_UP -> apps ?: top
-                    KeyEvent.KEYCODE_DPAD_DOWN -> v
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        val targetChild = alive(lastApp)?.takeIf { it.parent === lastAppAbove }
+                            ?: lastAppAbove?.getChildAt(i.coerceIn(1, (lastAppAbove.childCount - 1).coerceAtLeast(0)))
+                            ?: top
+                        scrollToView(targetChild)
+                        targetChild
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (firstAppBelow != null) {
+                            val targetChild = alive(lastApp)?.takeIf { it.parent === firstAppBelow }
+                                ?: firstAppBelow.getChildAt(i.coerceIn(1, (firstAppBelow.childCount - 1).coerceAtLeast(0)))
+                                ?: firstAppBelow.getChildAt(0)
+                            scrollToView(targetChild)
+                            targetChild
+                        } else v
+                    }
                     KeyEvent.KEYCODE_DPAD_LEFT -> if (i == 0) v else null
                     KeyEvent.KEYCODE_DPAD_RIGHT -> if (i == watchRow.childCount - 1) v else null
                     else -> null
@@ -3933,40 +5012,85 @@ class MainActivity : Activity() {
         val tag = v.tag as? String
         when {
             allApps.visibility == View.VISIBLE && tag != null -> unlock { // grid: pin to the front of the row (unhiding it)
+                val cats = categoriesList()
+                val targetCat = cats.firstOrNull() ?: Category(CategoryManager.DEFAULT_ID, getString(R.string.default_category_name))
+                val updatedCats = if (cats.isEmpty()) {
+                    listOf(targetCat.copy(apps = listOf(tag)))
+                } else {
+                    cats.mapIndexed { idx, c -> if (idx == 0) c.copy(apps = listOf(tag) + c.apps.filter { it != tag }) else c }
+                }
+                CategoryManager.saveCategories(prefs, updatedCats)
                 prefs.edit().putStringSet("row_hidden", rowHiddenSet() - tag).apply()
                 saveOrder(listOf(tag) + sortedApps().map { it.pkg }.filter { it != tag })
                 closeAllApps()
-                appRow.getChildAt(0)?.requestFocus() // show the app just pinned
+                appRows.firstOrNull()?.getChildAt(0)?.requestFocus()
             }
             v.parent === wifi.parent -> topMenu(v)
-            v.parent === appRow -> appMenu(v)
+            appRows.any { it === v.parent } -> appMenu(v)
             v.getTag(R.id.watchRow) is Prog -> watchMenu(v, v.getTag(R.id.watchRow) as Prog)
         }
     }
 
-    /** Hold OK on a row app: Move (OK places it), Remove from row (stays in All apps), App info. Locked: Open only. */
+    /** Hold OK on a row app: Move, Category, Remove from row, App info. Locked: Open only. */
     private fun appMenu(v: View) {
         val pkg = v.tag as String
+        val currentRow = findAppRowFor(v) ?: appRow
         if (locked()) return holdMenu(v, listOf(
             getString(R.string.open) to { v.performClick(); Unit },
             getString(R.string.unlock_to_edit) to { unlock { v.requestFocus(); appMenu(v) } },
         ))
+        val cats = categoriesList()
         holdMenu(v, listOfNotNull(
             getString(R.string.move) to { startEdit(grab = v, once = true) },
+            if (cats.size > 1 || cats.isNotEmpty()) getString(R.string.move_to_category) to { chooseCategoryForApp(v, pkg) } else null,
             getString(R.string.remove_from_row) to {
-                val i = appRow.indexOfChild(v)
-                // An input just unpins: it is in the Sources list anyway, so there is nothing to hide.
-                if (pkg.startsWith(HDMI)) prefs.edit().putStringSet("inputs_pinned", pinnedInputs() - pkg).apply()
-                else prefs.edit().putStringSet("row_hidden", rowHiddenSet() + pkg).apply()
+                val i = currentRow.indexOfChild(v)
+                if (pkg.startsWith(HDMI)) {
+                    prefs.edit().putStringSet("inputs_pinned", pinnedInputs() - pkg).apply()
+                } else {
+                    val updated = cats.map { c -> c.copy(apps = c.apps.filter { it != pkg }) }
+                    CategoryManager.saveCategories(prefs, updated)
+                    prefs.edit().putStringSet("row_hidden", rowHiddenSet() + pkg).apply()
+                }
                 renderApps()
-                appRow.getChildAt(minOf(i, appRow.childCount - 1))?.requestFocus()
+                currentRow.getChildAt(minOf(i, currentRow.childCount - 1))?.requestFocus()
                 toast(getString(R.string.removed_from_row))
+            },
+            if (pkg.startsWith(HDMI)) null else getString(R.string.hide_app) to {
+                prefs.edit().putStringSet("row_hidden", rowHiddenSet() + pkg).apply()
+                renderApps()
+                toast(getString(R.string.app_hidden))
             },
             if (pkg.startsWith(HDMI)) null else getString(R.string.app_info) to {
                 openSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", pkg, null))
             },
             if (canUninstall(pkg)) getString(R.string.uninstall) to { uninstall(pkg) } else null,
         ))
+    }
+
+    private fun chooseCategoryForApp(v: View, pkg: String) {
+        val cats = categoriesList()
+        val currentCat = categoryFor(pkg)
+        popupMenu(v, below = false) { dismiss ->
+            cats.map { cat ->
+                val isCurrent = cat.id == currentCat?.id
+                page(cat.name, if (isCurrent) CHOSEN else "") {
+                    dismiss()
+                    val updated = cats.map { c ->
+                        if (c.id == cat.id) {
+                            if (pkg !in c.apps) c.copy(apps = c.apps + pkg) else c
+                        } else {
+                            c.copy(apps = c.apps.filter { it != pkg })
+                        }
+                    }
+                    CategoryManager.saveCategories(prefs, updated)
+                    renderApps()
+                    toast(getString(R.string.added_to_category, cat.name))
+                }.let { p ->
+                    settingsRow(p.first, p.second) { p.third() }
+                }
+            }
+        }
     }
 
     /** Apps the user installed, and system apps that have an update on top. Never Plume or an HDMI tile. */
@@ -4216,16 +5340,16 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun appTileCount() = appRow.childCount
-
     private var moveOnce = false // moving one app from the hold menu: OK places it and editing ends
 
     private fun startEdit(grab: View?, once: Boolean = false) {
         editing = true
         moveOnce = once
+        val row = findAppRowFor(grab) ?: appRows.firstOrNull() ?: appRow
+        editingRowIndex = appRows.indexOf(row).coerceAtLeast(0)
         appsTitle.text = if (once) getString(R.string.moving_hint) else getString(R.string.editing_hint)
         appsTitle.visibility = View.VISIBLE
-        (grab ?: appRow.getChildAt(0)).requestFocus()
+        (grab ?: row.getChildAt(0))?.requestFocus()
         setGrabbed(grab)
     }
 
@@ -4240,9 +5364,18 @@ class MainActivity : Activity() {
         editing = false
         moveOnce = false
         appsTitle.visibility = View.GONE
-        val row = (0 until appTileCount()).map { appRow.getChildAt(it).tag as String }
-        saveOrder(row + sortedApps().map { it.pkg }.filter { it !in row })
-        currentFocus?.takeIf { it.parent === appRow }?.let { showRowLabel(it, true) } // the name was hidden while editing
+        val row = appRows.getOrNull(editingRowIndex) ?: appRow
+        val rowPkgs = (0 until row.childCount).mapNotNull { row.getChildAt(it)?.tag as? String }
+        val cats = categoriesList()
+        if (editingRowIndex in cats.indices) {
+            val updated = cats.mapIndexed { idx, c ->
+                if (idx == editingRowIndex) c.copy(apps = rowPkgs) else c
+            }
+            CategoryManager.saveCategories(prefs, updated)
+        } else {
+            saveOrder(rowPkgs + sortedApps().map { it.pkg }.filter { it !in rowPkgs })
+        }
+        currentFocus?.takeIf { it.parent === row }?.let { showRowLabel(it, true) }
     }
 
     /** While editing, keys only rearrange the row; nothing launches and focus can't leave it. */
@@ -4252,9 +5385,10 @@ class MainActivity : Activity() {
             return true
         }
         val v = currentFocus ?: return false
-        val i = appRow.indexOfChild(v)
+        val row = findAppRowFor(v) ?: (appRows.getOrNull(editingRowIndex) ?: appRow)
+        val i = row.indexOfChild(v)
         if (confirm) {
-            if (e.action == KeyEvent.ACTION_UP && i in 0 until appTileCount()) {
+            if (e.action == KeyEvent.ACTION_UP && i in 0 until row.childCount) {
                 if (moveOnce) endEdit() else setGrabbed(if (grabbed === v) null else v)
             }
             return true
@@ -4264,20 +5398,19 @@ class MainActivity : Activity() {
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> return true
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 val j = if (e.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) i - 1 else i + 1
-                if (j !in 0 until appTileCount()) return true
+                if (j !in 0 until row.childCount) return true
                 if (grabbed === v) {
-                    // Swap layout params too, so the first tile keeps no leading margin.
-                    val other = appRow.getChildAt(j)
+                    val other = row.getChildAt(j)
                     val lp = v.layoutParams
                     v.layoutParams = other.layoutParams
                     other.layoutParams = lp
-                    appRow.removeViewAt(i)
-                    appRow.addView(v, j)
+                    row.removeViewAt(i)
+                    row.addView(v, j)
                     showNames()
                     v.requestFocus()
                     return true
                 }
-                return false // not holding anything: normal focus movement within the row
+                return false
             }
         }
         return false
@@ -4289,9 +5422,289 @@ class MainActivity : Activity() {
     private fun pickRowApps() {
         val list = sortedApps().filter { !it.pkg.startsWith(HDMI) } // inputs are pinned from the Sources list
         toggles(getString(R.string.apps_in_row), list.map { it.label to it.pkg }, "row_hidden", getString(R.string.shown), getString(R.string.hidden)) {
+            val hidden = rowHiddenSet()
+            val cats = categoriesList()
+            if (cats.isNotEmpty()) {
+                val updated = cats.mapIndexed { idx, c ->
+                    if (idx == 0) c.copy(apps = sortedApps().map { it.pkg }.filter { inRow(it, hidden) }) else c
+                }
+                CategoryManager.saveCategories(prefs, updated)
+            }
             renderApps()
             renderSettings(R.string.apps_in_row)
         }
+    }
+
+    private fun pickInputsSettings() {
+        val detected = hdmiInputs().map { it.pkg to it.label }
+        val inputs = TopInputManager.loadInputs(prefs, detected)
+        val rows = listOf(
+            page(getString(R.string.add_input), "+") {
+                promptAddInput()
+            }
+        ) + inputs.map { input ->
+            val iconName = when (input.icon) {
+                "nintendoswitch" -> getString(R.string.input_icon_switch)
+                "wii" -> getString(R.string.input_icon_wii)
+                "freebox" -> getString(R.string.input_icon_freebox)
+                "pc" -> getString(R.string.input_icon_pc)
+                "playstation" -> getString(R.string.input_icon_playstation)
+                "xbox" -> getString(R.string.input_icon_xbox)
+                "appletv" -> getString(R.string.input_icon_appletv)
+                else -> getString(R.string.input_icon_hdmi)
+            }
+            val status = if (input.hidden) getString(R.string.hidden) else iconName
+            page(input.name, status) {
+                manageSingleInput(input)
+            }
+        }
+        showPage(getString(R.string.inputs_bar), rows, back = { renderSettings(R.string.inputs_bar) })
+    }
+
+    private fun promptAddInput() {
+        val iconChoices = inputIconChoices()
+        promptInputName("") { name ->
+            val detected = hdmiInputs().map { it.pkg to it.label }
+            val inputs = TopInputManager.loadInputs(prefs, detected).toMutableList()
+            val newId = "input_${System.currentTimeMillis()}"
+            showPage(getString(R.string.choose_input_icon), iconChoices.map { (label, key) ->
+                page(label, "") {
+                    inputs.add(TopInput(newId, name, key))
+                    TopInputManager.saveInputs(prefs, inputs)
+                    renderInputsBar()
+                    pickInputsSettings()
+                }
+            }, back = { pickInputsSettings() })
+        }
+    }
+
+    private fun manageSingleInput(input: TopInput) {
+        val detected = hdmiInputs().map { it.pkg to it.label }
+        val inputs = TopInputManager.loadInputs(prefs, detected)
+        val current = inputs.firstOrNull { it.id == input.id } ?: input
+        val iconChoices = inputIconChoices()
+        val rows = listOf(
+            page(getString(R.string.choose_input_icon), "") {
+                showPage(getString(R.string.choose_input_icon), iconChoices.map { (label, key) ->
+                    page(label, if (current.icon == key) "✓" else "") {
+                        val updated = inputs.map { if (it.id == current.id) it.copy(icon = key) else it }
+                        TopInputManager.saveInputs(prefs, updated)
+                        renderInputsBar()
+                        manageSingleInput(current.copy(icon = key))
+                    }
+                }, back = { manageSingleInput(current) })
+            },
+            page(getString(R.string.rename_category), "") {
+                promptInputName(current.name) { newName ->
+                    val updated = inputs.map { if (it.id == current.id) it.copy(name = newName) else it }
+                    TopInputManager.saveInputs(prefs, updated)
+                    renderInputsBar()
+                    manageSingleInput(current.copy(name = newName))
+                }
+            },
+            page(getString(R.string.inputs_in_bar), if (current.hidden) getString(R.string.hidden) else getString(R.string.shown)) {
+                val updated = inputs.map { if (it.id == current.id) it.copy(hidden = !it.hidden) else it }
+                TopInputManager.saveInputs(prefs, updated)
+                renderInputsBar()
+                manageSingleInput(current.copy(hidden = !current.hidden))
+            },
+            page(getString(R.string.delete_input), "") {
+                val updated = inputs.filter { it.id != current.id }
+                TopInputManager.saveInputs(prefs, updated)
+                renderInputsBar()
+                pickInputsSettings()
+            }
+        )
+        showPage(current.name, rows, back = { pickInputsSettings() })
+    }
+
+    private fun pickCategoriesSettings() {
+        val cats = categoriesList()
+        val showTitles = CategoryManager.showTitles(prefs)
+        val rows = listOf(
+            page(getString(R.string.category_titles), if (showTitles) getString(R.string.shown) else getString(R.string.hidden)) {
+                CategoryManager.setShowTitles(prefs, !showTitles)
+                renderApps()
+                pickCategoriesSettings()
+            },
+            page(getString(R.string.add_category), "+") {
+                promptCategoryName("", isNew = true)
+            }
+        ) + cats.mapIndexed { idx, cat ->
+            val count = cat.apps.size
+            page(cat.name, "$count") {
+                manageSingleCategory(cat)
+            }
+        }
+        showPage(getString(R.string.categories), rows, back = { renderSettings(R.string.categories) })
+    }
+
+    private fun promptCategoryName(currentName: String, isNew: Boolean, catId: String = "", onDone: (() -> Unit)? = null) {
+        val field = textField(currentName, getString(R.string.category_name_hint),
+            InputType.TYPE_TEXT_FLAG_CAP_WORDS, EditorInfo.IME_ACTION_DONE) { enteredName ->
+            val name = enteredName.trim()
+            if (name.isNotEmpty()) {
+                val cats = categoriesList().toMutableList()
+                if (isNew) {
+                    val newId = "cat_${System.currentTimeMillis()}"
+                    cats.add(Category(newId, name, emptyList()))
+                } else {
+                    val idx = cats.indexOfFirst { it.id == catId }
+                    if (idx >= 0) cats[idx] = cats[idx].copy(name = name)
+                }
+                CategoryManager.saveCategories(prefs, cats)
+                renderApps()
+            }
+            onDone?.invoke() ?: pickCategoriesSettings()
+        }
+        showPage(if (isNew) getString(R.string.add_category) else getString(R.string.rename_category),
+            emptyList(), top = field.parent as View, back = { onDone?.invoke() ?: pickCategoriesSettings() })
+        settingsList.getChildAt(0)?.nextFocusDownId = field.id
+        field.requestFocus()
+    }
+
+    private fun promptInputName(currentName: String, onEntered: (String) -> Unit) {
+        val field = textField(currentName, getString(R.string.input_name_hint),
+            InputType.TYPE_TEXT_FLAG_CAP_WORDS, EditorInfo.IME_ACTION_DONE) { enteredName ->
+            val name = enteredName.trim()
+            if (name.isNotEmpty()) onEntered(name)
+            closeLauncherSettings()
+        }
+        showPage(getString(R.string.input_name_hint), emptyList(), top = field.parent as View, back = { closeLauncherSettings() })
+        settingsList.getChildAt(0)?.nextFocusDownId = field.id
+        field.requestFocus()
+    }
+
+    private fun manageSingleCategory(cat: Category, fromRow: Boolean = false) {
+        val cats = categoriesList()
+        val catIdx = cats.indexOfFirst { it.id == cat.id }
+        val currentCat = cats.getOrNull(catIdx) ?: cat
+        val onBack: () -> Unit = if (fromRow) { { closeLauncherSettings() } } else { { pickCategoriesSettings() } }
+
+        val defaultSizeName = getString(ROW_SIZES[rowSize()]?.first ?: R.string.size_standard)
+        val inheritSizeLabel = "${getString(R.string.inherit)} ($defaultSizeName)"
+        val sizeLabel = when (currentCat.size) {
+            "smallest" -> getString(R.string.size_smallest)
+            "small" -> getString(R.string.size_small)
+            "standard" -> getString(R.string.size_standard)
+            "large" -> getString(R.string.size_large)
+            "largest" -> getString(R.string.size_largest)
+            else -> inheritSizeLabel
+        }
+
+        val styleLabel = when (currentCat.iconStyle) {
+            "mono" -> getString(R.string.monochrome)
+            "colour" -> getString(R.string.colour)
+            "banner" -> getString(R.string.banner)
+            "bannermono" -> getString(R.string.banner_mono)
+            else -> getString(R.string.inherit)
+        }
+
+        val sizeChoices = listOf(
+            inheritSizeLabel to "inherit",
+            getString(R.string.size_smallest) to "smallest",
+            getString(R.string.size_small) to "small",
+            getString(R.string.size_standard) to "standard",
+            getString(R.string.size_large) to "large",
+            getString(R.string.size_largest) to "largest",
+        )
+
+        val styleChoices = listOf(
+            getString(R.string.inherit) to "inherit",
+            getString(R.string.monochrome) to "mono",
+            getString(R.string.colour) to "colour",
+            getString(R.string.banner) to "banner",
+            getString(R.string.banner_mono) to "bannermono",
+        )
+
+        val rows = listOfNotNull(
+            page(getString(R.string.choose_apps), "${currentCat.apps.size}") {
+                pickAppsForCategory(currentCat.id, fromRow)
+            },
+            page(getString(R.string.rename_category), "") {
+                promptCategoryName(currentCat.name, isNew = false, catId = currentCat.id) {
+                    manageSingleCategory(categoriesList().firstOrNull { it.id == currentCat.id } ?: currentCat, fromRow)
+                }
+            },
+            page(getString(R.string.row_size), sizeLabel) {
+                showPage(getString(R.string.row_size), sizeChoices.map { (label, key) ->
+                    page(label, if (currentCat.size == key) "✓" else "") {
+                        val updated = categoriesList().map { if (it.id == currentCat.id) it.copy(size = key) else it }
+                        CategoryManager.saveCategories(prefs, updated)
+                        renderApps()
+                        manageSingleCategory(currentCat.copy(size = key), fromRow)
+                    }
+                }, back = { manageSingleCategory(currentCat, fromRow) })
+            },
+            page(getString(R.string.row_icon_style), styleLabel) {
+                showPage(getString(R.string.row_icon_style), styleChoices.map { (label, key) ->
+                    page(label, if (currentCat.iconStyle == key) "✓" else "") {
+                        val updated = categoriesList().map { if (it.id == currentCat.id) it.copy(iconStyle = key) else it }
+                        CategoryManager.saveCategories(prefs, updated)
+                        renderApps()
+                        manageSingleCategory(currentCat.copy(iconStyle = key), fromRow)
+                    }
+                }, back = { manageSingleCategory(currentCat, fromRow) })
+            },
+            page(getString(R.string.category_position), if (currentCat.belowWatch) getString(R.string.position_below_watch) else getString(R.string.position_above_watch)) {
+                val posChoices = listOf(
+                    getString(R.string.position_above_watch) to false,
+                    getString(R.string.position_below_watch) to true
+                )
+                showPage(getString(R.string.category_position), posChoices.map { (label, isBelow) ->
+                    page(label, if (currentCat.belowWatch == isBelow) "✓" else "") {
+                        val updated = categoriesList().map { if (it.id == currentCat.id) it.copy(belowWatch = isBelow) else it }
+                        CategoryManager.saveCategories(prefs, updated)
+                        renderApps()
+                        manageSingleCategory(currentCat.copy(belowWatch = isBelow), fromRow)
+                    }
+                }, back = { manageSingleCategory(currentCat, fromRow) })
+            },
+            if (catIdx > 0) page(getString(R.string.move_row_up), "") {
+                val updated = cats.toMutableList()
+                val item = updated.removeAt(catIdx)
+                updated.add(catIdx - 1, item)
+                CategoryManager.saveCategories(prefs, updated)
+                renderApps()
+                manageSingleCategory(currentCat, fromRow)
+            } else null,
+            if (catIdx in 0 until cats.size - 1) page(getString(R.string.move_row_down), "") {
+                val updated = cats.toMutableList()
+                val item = updated.removeAt(catIdx)
+                updated.add(catIdx + 1, item)
+                CategoryManager.saveCategories(prefs, updated)
+                renderApps()
+                manageSingleCategory(currentCat, fromRow)
+            } else null,
+            if (cats.size > 1) page(getString(R.string.delete_category), "") {
+                val updated = cats.filter { it.id != currentCat.id }
+                CategoryManager.saveCategories(prefs, updated)
+                renderApps()
+                onBack()
+            } else null
+        )
+        showPage(currentCat.name, rows, back = onBack)
+    }
+
+    private fun pickAppsForCategory(catId: String, fromRow: Boolean = false) {
+        val cats = categoriesList()
+        val cat = cats.firstOrNull { it.id == catId } ?: return if (fromRow) closeLauncherSettings() else pickCategoriesSettings()
+        val allAvailable = sortedApps()
+        val inCat = cat.apps.toSet()
+
+        val items = allAvailable.map { it.label to it.pkg }
+        val focus = 0
+        showPage(getString(R.string.choose_apps), items.mapIndexed { i, (name, pkg) ->
+            page(name, if (pkg in inCat) getString(R.string.shown) else getString(R.string.hidden)) {
+                val newApps = if (pkg in inCat) cat.apps - pkg else cat.apps + pkg
+                val updated = cats.map { c ->
+                    if (c.id == catId) c.copy(apps = newApps) else c
+                }
+                CategoryManager.saveCategories(prefs, updated)
+                renderApps()
+                pickAppsForCategory(catId, fromRow)
+            }
+        }, focus = focus, back = { manageSingleCategory(cat, fromRow) })
     }
 
     /** A page of on/off rows saved as the set of keys that are off; [done] runs on Back. */
@@ -4663,6 +6076,17 @@ class MainActivity : Activity() {
             if (ver != null) page(getString(R.string.install_update, ver)) { installUpdate(ver) }
             else page(getString(R.string.check_updates)) { checkUpdate(force = true) },
         ), back = { renderSettings(R.string.updates) })
+        // About / Fork banner
+        settingsList.addView(label("Shizuka v${myVersion()}", 14f).apply {
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(14), dp(16), dp(14), dp(2))
+        })
+        settingsList.addView(label("Fork de Plume Launcher optimisé pour Android TV.\nConçu pour la fluidité, le design et la personnalisation moderne.", 12f).apply {
+            alpha = 0.75f
+            maxLines = Int.MAX_VALUE
+            ellipsize = null
+            setPadding(dp(14), dp(2), dp(14), dp(12))
+        })
         // Focusable, lit on focus, so Down walks through notes longer than the panel and it scrolls along.
         getString(R.string.whats_new).split('\n').forEach {
             if (it.startsWith("#")) {
@@ -5049,14 +6473,22 @@ class MainActivity : Activity() {
      * Apps that can feed Continue Watching: anything allowed to write TV listings, plus anything
      * actually publishing now. Built from installed apps each time, so new apps appear on their own.
      */
-    private fun watchSources(): List<App> = apps.filter { a ->
-        a.pkg in publishingPkgs || try {
-            packageManager.getPackageInfo(a.pkg, PackageManager.GET_PERMISSIONS)
-                .requestedPermissions?.contains(WRITE_EPG) == true
-        } catch (e: PackageManager.NameNotFoundException) {
-            false
-        }
-    }.sortedBy { it.label.lowercase() }
+    private fun watchSources(): List<App> {
+        val streamKeywords = listOf(
+            "video", "tv", "stream", "media", "netflix", "youtube", "disney", "prime", "plex",
+            "kodi", "jellyfin", "vlc", "canal", "molotov", "max", "paramount", "arte", "hbo", "crunchyroll"
+        )
+        return apps.filter { a ->
+            a.pkg in publishingPkgs ||
+            streamKeywords.any { a.pkg.lowercase().contains(it) || a.label.lowercase().contains(it) } ||
+            try {
+                packageManager.getPackageInfo(a.pkg, PackageManager.GET_PERMISSIONS)
+                    .requestedPermissions?.contains(WRITE_EPG) == true
+            } catch (e: PackageManager.NameNotFoundException) {
+                false
+            }
+        }.distinctBy { it.pkg }.sortedBy { it.label.lowercase() }
+    }
 
     private fun pickWatchSources() {
         val sources = watchSources()
@@ -5249,7 +6681,7 @@ class MainActivity : Activity() {
         if (watchScroll.visibility != vis) { watchTitle.visibility = vis; watchScroll.visibility = vis }
         val hidden = show == "down" && has && !rowOut
         // From where the app row sits above the bottom row to where it would sit without it.
-        val drop = (watchScroll.bottom - appScroll.bottom).toFloat().coerceAtLeast(0f)
+        val drop = if (appRows.size > 1) 0f else (watchScroll.bottom - appScroll.bottom).toFloat().coerceAtLeast(0f)
         val appY = if (hidden && rowDrops()) drop else 0f
         val rowY = if (!hidden) 0f else if (rowDrops()) drop else dp(24).toFloat()
         fun move(v: View, y: Float, a: Float) {
@@ -5304,10 +6736,11 @@ class MainActivity : Activity() {
         }
         val frame = FrameLayout(this)
         // The poster fills the card, so frost under it would never show and would only cost work on every frame.
-        style(frame, dp(8), card = true, lift = 1.1f, frost = false) { focused ->
+        style(frame, tileRadius(), card = true, lift = 1.1f, frost = false) { focused ->
             title.isSelected = focused
             if (focused) {
                 lastCard = frame
+                scrollToView(frame)
                 addCardsTo(watchRow.indexOfChild(col) + CARDS_AHEAD)
             }
         }
@@ -5349,7 +6782,7 @@ class MainActivity : Activity() {
         fun bar(color: Int) = GradientDrawable().apply { cornerRadius = dp(2).toFloat(); setColor(color) }
         return LayerDrawable(arrayOf(
             bar(if (Color.luminance(ink) > 0.5f) 0x40FFFFFF else 0x26000000),
-            ClipDrawable(bar(ink), Gravity.START, ClipDrawable.HORIZONTAL),
+            ClipDrawable(bar(accentColor), Gravity.START, ClipDrawable.HORIZONTAL),
         )).apply {
             setId(0, android.R.id.background)
             setId(1, android.R.id.progress)
@@ -5438,7 +6871,7 @@ class MainActivity : Activity() {
         v.background = if (dark && card) rimCard(radius, false, frosted = frosted) else rest ?: GradientDrawable().apply { cornerRadius = radius.toFloat() }
         if (!dark) v.foreground = sheen
         v.clipToOutline = true
-        v.elevation = if (card) dp(2).toFloat() else 0f
+        v.elevation = if (card) dp(4).toFloat() else dp(1).toFloat()
         v.isFocusable = true
         v.isClickable = true
         v.setOnLongClickListener { if (!holdFired) fireHold(v); true }
@@ -5447,13 +6880,19 @@ class MainActivity : Activity() {
             if (card && dark) v.background = rimCard(radius, focused, frosted = frosted)
             else if (card) v.background = if (focused) lit else rest
             if (frosted) glass.kick(260) // the lift moves the tile: its blur follows
+            if (focused) {
+                v.foreground = GoogleNeonDrawable(radius = radius.toFloat(), density = resources.displayMetrics.density)
+            } else {
+                (v.foreground as? Animatable)?.stop()
+                v.foreground = if (!dark) sheen else null
+            }
             // The selected tile rises out of the row's line. Its growth stops short of the gap, so at the
             // largest size it still doesn't cover its neighbours.
             val grow = if (focused && v.width > 0) minOf(lift, 1 + dp(GRID_GAP) * 1.2f / v.width) else 1f
             v.animate()
                 .scaleX(grow).scaleY(grow)
-                .translationY(if (focused) -maxOf(v.height * 0.06f, dp(4).toFloat()) else 0f)
-                .translationZ(if (focused) dp(14).toFloat() else 0f)
+                .translationY(if (focused) -maxOf(v.height * 0.07f, dp(5).toFloat()) else 0f)
+                .translationZ(if (focused) dp(18).toFloat() else 0f)
                 .setDuration(160).setInterpolator(DECELERATE).start()
             onFocus?.invoke(focused)
         }
@@ -5568,13 +7007,14 @@ class MainActivity : Activity() {
         val ROW_ICONS = mapOf(
             R.string.theme to R.drawable.ms_contrast, R.string.glass to R.drawable.ms_blur_on, R.string.app_animations to R.drawable.ms_open_in_full,
             R.string.edit_apps_row to R.drawable.ms_swap_horiz, R.string.apps_in_row to R.drawable.ms_checklist, R.string.sort_apps to R.drawable.ms_sort,
-            R.string.icon_style to R.drawable.ms_apps, R.string.row_size to R.drawable.ms_format_size, R.string.app_names to R.drawable.ms_label,
+            R.string.categories to R.drawable.ms_view_carousel, R.string.inputs_bar to R.drawable.ic_hdmi,
+            R.string.icon_style to R.drawable.ms_apps, R.string.row_size to R.drawable.ms_format_size, R.string.row_spacing to R.drawable.ic_row_spacing, R.string.tile_radius to R.drawable.ms_apps, R.string.glow_style to R.drawable.ms_palette, R.string.focus_dimming to R.drawable.ms_visibility, R.string.app_names to R.drawable.ms_label,
             R.string.row_position to R.drawable.ms_format_align_left,
             R.string.show_row to R.drawable.ms_visibility, R.string.apps_when_hidden to R.drawable.ms_vertical_align_bottom, R.string.row_name to R.drawable.ms_edit,
             R.string.show_icons to R.drawable.ms_badge, R.string.cw_apps to R.drawable.ms_widgets, R.string.cw_channels to R.drawable.ms_podcasts,
             R.string.restore_hidden to R.drawable.ms_visibility_off,
             R.string.clock_style to R.drawable.ms_schedule, R.string.clock_size to R.drawable.ms_format_size, R.string.weather to R.drawable.ms_partly_cloudy_day, R.string.weather_units to R.drawable.ms_thermostat, R.string.weather_location to R.drawable.ms_location_on,
-            R.string.screensaver to R.drawable.ms_bedtime, R.string.test_screensaver to R.drawable.ms_play_circle, R.string.screensaver_timing to R.drawable.ms_timer,
+            R.string.screensaver to R.drawable.ms_bedtime, R.string.idle_clean to R.drawable.ms_bedtime, R.string.test_screensaver to R.drawable.ms_play_circle, R.string.screensaver_timing to R.drawable.ms_timer,
             R.string.home_button to R.drawable.ms_home, R.string.default_launcher to R.drawable.ms_home_app_logo, R.string.smooth_volume to R.drawable.ms_volume_up,
             R.string.section_keys to R.drawable.ms_keyboard, R.string.setup_home to R.drawable.ms_restart_alt,
         )
@@ -5589,13 +7029,16 @@ class MainActivity : Activity() {
             R.string.theme to R.string.help_theme, R.string.glass to R.string.help_glass, R.string.app_animations to R.string.help_app_animations,
             R.string.app_names to R.string.help_app_names, R.string.row_position to R.string.help_row_position, R.string.show_row to R.string.help_show_row,
             R.string.clock_style to R.string.help_clock_style, R.string.clock_size to R.string.help_clock_size, R.string.weather to R.string.help_weather, R.string.weather_units to R.string.help_units, R.string.screensaver to R.string.help_screensaver_pick,
+            R.string.idle_clean to R.string.help_screensaver_pick,
             R.string.test_screensaver to R.string.help_preview, R.string.folder_photo_changes to R.string.help_photo_every,
             R.string.section_app_row to R.string.help_apps_row, R.string.bottom_row to R.string.help_shows_row,
             R.string.section_screensaver to R.string.help_screensaver, R.string.section_remote_home to R.string.help_remote_home,
             R.string.section_lock to R.string.help_lock,
             R.string.weather_location to R.string.help_location,
             R.string.edit_apps_row to R.string.help_rearrange, R.string.apps_in_row to R.string.help_choose_apps,
-            R.string.sort_apps to R.string.help_order, R.string.icon_style to R.string.help_icon_style, R.string.row_size to R.string.help_row_size,
+            R.string.categories to R.string.categories, R.string.inputs_bar to R.string.inputs_in_bar,
+            R.string.sort_apps to R.string.help_order, R.string.icon_style to R.string.help_icon_style, R.string.row_size to R.string.help_row_size, R.string.row_spacing to R.string.help_row_spacing,
+            R.string.tile_radius to R.string.help_tile_radius, R.string.glow_style to R.string.help_glow_style, R.string.focus_dimming to R.string.help_focus_dimming,
             R.string.apps_when_hidden to R.string.help_apps_when_hidden, R.string.row_name to R.string.help_row_name,
             R.string.show_icons to R.string.help_show_icons,
             R.string.cw_apps to R.string.help_from_apps, R.string.cw_channels to R.string.help_channels,
@@ -5606,7 +7049,29 @@ class MainActivity : Activity() {
         )
         val ROW_SHOW = linkedMapOf("always" to R.string.always, "down" to R.string.on_down, "never" to R.string.never) // "Show row"
         val CLOCK_SIZES = linkedMapOf(38 to R.string.clock_small, 48 to R.string.clock_medium, 60 to R.string.clock_large) // sp
-        val CLOCK_STYLES = linkedMapOf("light" to R.string.clock_light, "bold" to R.string.clock_bold, "serif" to R.string.clock_serif)
+        val CLOCK_STYLES = linkedMapOf(
+            "light" to R.string.clock_light,
+            "bold" to R.string.clock_bold,
+            "serif" to R.string.clock_serif,
+            "pixel" to R.string.clock_pixel,
+            "apple" to R.string.clock_apple
+        )
+        val GLOW_ANIMS = linkedMapOf(
+            "spin" to R.string.glow_anim_spin,
+            "pulse" to R.string.glow_anim_pulse,
+            "static" to R.string.glow_anim_static,
+        )
+        val GLOW_THICKNESS = linkedMapOf(
+            "subtle" to R.string.glow_thickness_subtle,
+            "standard" to R.string.glow_thickness_standard,
+            "bold" to R.string.glow_thickness_bold,
+        )
+        val IDLE_CLEAN_TIMES = linkedMapOf(
+            0 to R.string.idle_clean_off,
+            2 to R.string.idle_clean_2m,
+            5 to R.string.idle_clean_5m,
+            10 to R.string.idle_clean_10m,
+        )
         const val BADGE = 0xFFFF453A.toInt()
         // Dark mode tokens, for AMOLED: true black, and near-black cards that read as cards because their edge
         // catches light (brightest along the top), the way light-mode cards use a soft shadow.
@@ -5628,6 +7093,7 @@ class MainActivity : Activity() {
         const val TOGGLE_ON = "\u0000on" // row values drawn as a switch instead of text
         const val TOGGLE_OFF = "\u0000off"
         const val BANNER_DIM = 0.3f // black laid over a colour banner at rest, so the selected one stands out
+        const val DEFAULT_ACCENT = 0xFF4DA3FF.toInt() // progress bars on a plain wallpaper
         const val FETCH_OK = 0
         const val FETCH_DEAD = 1
         const val FETCH_NETWORK = 2
@@ -5651,7 +7117,39 @@ class MainActivity : Activity() {
         const val HDMI = "hdmi:" // App.pkg prefix for HDMI device tiles; the rest is the TV input id
         const val ROW_TILES = 8 // across at Standard size; the other sizes scale from it
         /** "Size" setting -> its name, and how many tiles fit across. 8 and 4 keep the columns over the four cards. */
-        val ROW_SIZES = linkedMapOf("standard" to (R.string.size_standard to 8), "large" to (R.string.size_large to 6), "largest" to (R.string.size_largest to 4))
+        val ROW_SIZES = linkedMapOf(
+            "smallest" to (R.string.size_smallest to 12),
+            "small" to (R.string.size_small to 10),
+            "standard" to (R.string.size_standard to 8),
+            "large" to (R.string.size_large to 6),
+            "largest" to (R.string.size_largest to 4)
+        )
+        val ROW_SPACINGS = linkedMapOf(
+            "very_compact" to R.string.spacing_very_compact,
+            "compact" to R.string.spacing_compact,
+            "normal" to R.string.spacing_normal,
+            "spacious" to R.string.spacing_spacious,
+            "wide" to R.string.spacing_wide,
+        )
+        /** "Selection glow" setting -> its name. */
+        val GLOW_NAMES = linkedMapOf(
+            "google" to R.string.glow_google, "aurora" to R.string.glow_aurora, "sunset" to R.string.glow_sunset,
+            "ocean" to R.string.glow_ocean, "fire" to R.string.glow_fire, "cyber" to R.string.glow_cyber,
+            "white" to R.string.glow_white, "accent" to R.string.glow_accent,
+        )
+        val GLOW_SUBS = mapOf(
+            "google" to R.string.glow_google_sub, "aurora" to R.string.glow_aurora_sub, "sunset" to R.string.glow_sunset_sub,
+            "ocean" to R.string.glow_ocean_sub, "fire" to R.string.glow_fire_sub, "cyber" to R.string.glow_cyber_sub,
+            "white" to R.string.glow_white_sub, "accent" to R.string.glow_accent_sub,
+        )
+        /** "Tile corners" setting -> its name and corner radius in dp. */
+        val TILE_RADII = linkedMapOf(
+            "sharp" to (R.string.radius_sharp to 2),
+            "classic" to (R.string.radius_classic to 8),
+            "rounded" to (R.string.radius_rounded to 14),
+            "very_rounded" to (R.string.radius_very_rounded to 20),
+            "pill" to (R.string.radius_pill to 40),
+        )
         /** Icon style setting -> its name. */
         val ICON_STYLES = linkedMapOf(ICON_STYLE_KEYS[0] to R.string.monochrome, ICON_STYLE_KEYS[1] to R.string.colour, ICON_STYLE_KEYS[2] to R.string.banner, ICON_STYLE_KEYS[3] to R.string.banner_mono)
         /** Glass setting -> its styles in cycling order; null is off. */
@@ -5719,6 +7217,15 @@ class MainActivity : Activity() {
             "playstation" to R.drawable.logo_playstation,
             "xbox" to R.drawable.logo_xbox,
             "nintendoswitch" to R.drawable.logo_nintendoswitch,
+            "wii" to R.drawable.ic_wiimote,
+            "wiimote" to R.drawable.ic_wiimote,
+            "wii_text" to R.drawable.logo_wii,
+            "freebox" to R.drawable.ic_freebox_delta,
+            "freebox_delta" to R.drawable.ic_freebox_delta,
+            "freebox_logo" to R.drawable.ic_freebox,
+            "pc" to R.drawable.ic_pc_desktop,
+            "pc_desktop" to R.drawable.ic_pc_desktop,
+            "pc_monitor" to R.drawable.ic_pc,
             "appletv" to R.drawable.logo_appletv,
             "nvidia" to R.drawable.logo_nvidia,
             "chromecast" to R.drawable.logo_chromecast,

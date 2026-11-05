@@ -1,18 +1,14 @@
 # Changelog
 
-Plume shows the section for its own version in **Plume settings → Updates** after an update.
-After an update, a card on the home screen shows the first 6 entries. Put the 6 most interesting changes first. Put small fixes last, as plain lines.
-The build stops if `versionName` has no section here.
+## 1.0.0
 
-Write every entry in ASD-STE100 Simplified Technical English:
-
-- Write one idea in each sentence. Use 20 words or fewer in each sentence.
-- Use the active voice and the present tense.
-- Write instructions as commands: "Select **Updates**", not "**Updates** can be selected".
-- Use one word for one thing. Use the names that Plume shows on the screen.
-- Start each entry with "- ". Plume shows each entry as one item. It removes `**` marks.
-
-Put changes that are not released under `## Unreleased`. Rename that heading to the version number when you release.
+- **Fork de Plume.** Shizuka est un fork moderne et fluide de Plume Launcher pour Android TV.
+- **Lueur de sélection personnalisée.** Choix parmi 8 thèmes néon (Google, Aurore, Coucher de soleil, Océan, Feu, Cyberpunk, Blanc pur, Couleur du thème) avec animation (rotation, pulsation ou fixe) et épaisseur réglable.
+- **Horloges & Météo modernisées.** Nouveaux styles d'horloge Pixel (2 lignes) et Apple TV moderne, avec icônes météo vectorielles épurées.
+- **Relief & Profondeur 3D.** Ombres portées matérielles douces sur les tuiles sélectionnées.
+- **Gestion des catégories & lignes.** Création et réorganisation de lignes d'applications personnalisées, positionnables au-dessus ou sous la reprise de lecture.
+- **Menu contextuel enrichi.** Masquage direct d'une application depuis son menu d'options (appui long).
+- **Mode Cadre photo automatique.** Mise en veille épurée masquant les tuiles après un délai d'inactivité au choix.
 
 ## 1.7.1
 

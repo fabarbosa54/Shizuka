@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Freebox / router settop box (Material Symbols router / tv-box, Apache 2.0). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <group android:translateY="960">
+        <path android:fillColor="#FF000000" android:pathData="M160-240q-33 0-56.5-23.5T80-320v-160q0-33 23.5-56.5T160-560h640q33 0 56.5 23.5T880-480v160q0 33-23.5 56.5T800-240H160Zm0-80h640v-160H160v160Zm120-40q17 0 28.5-11.5T320-400q0-17-11.5-28.5T280-440q-17 0-28.5 11.5T240-400q0 17 11.5 28.5T280-360Zm160 0q17 0 28.5-11.5T480-400q0-17-11.5-28.5T440-440q-17 0-28.5 11.5T400-400q0 17 11.5 28.5T440-360Zm160 0q17 0 28.5-11.5T640-400q0-17-11.5-28.5T600-440q-17 0-28.5 11.5T560-400q0 17 11.5 28.5T600-360ZM480-640q-17 0-28.5-11.5T440-680v-120h-80q-17 0-28.5-11.5T320-840q0-17 11.5-28.5T360-880h240q17 0 28.5 11.5T640-840q0-17-11.5-28.5T600-880h-80v120q0 17-11.5 28.5T480-640ZM160-320v-160 160Z" />
+    </group>
+</vector>
+

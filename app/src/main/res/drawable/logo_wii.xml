@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- wii mark from Simple Icons (CC0). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path android:fillColor="#FF000000" android:pathData="M4.32 7.02l-1.92 9.96H.48L3.24 3h2.16l1.8 9.9 1.8-9.9h2.16l2.76 13.98h-1.92L10.08 7.02l-1.8 9.96H6.12L4.32 7.02zm11.76-2.22c.66 0 1.2-.54 1.2-1.2s-.54-1.2-1.2-1.2-1.2.54-1.2 1.2.54 1.2 1.2 1.2zm-.96 12.18h1.92V7.98h-1.92v8.98zm4.8-12.18c.66 0 1.2-.54 1.2-1.2s-.54-1.2-1.2-1.2-1.2.54-1.2 1.2.54 1.2 1.2 1.2zm-.96 12.18h1.92V7.98h-1.92v8.98z" />
+</vector>
+
