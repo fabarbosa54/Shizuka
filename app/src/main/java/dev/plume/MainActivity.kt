@@ -4372,9 +4372,8 @@ class MainActivity : Activity() {
                     setTypeface(typeface, Typeface.BOLD)
                     alpha = 0.75f
                     val topM = if (isFirstOverall) 0
-                        else if (isBelowGroup && isFirstInGroup) {
-                            if (watchScroll.visibility == View.VISIBLE) spacing + dp(22) else spacing + dp(8)
-                        } else spacing + dp(6)
+                        else if (isBelowGroup && isFirstInGroup) spacing + dp(12)
+                        else spacing + dp(6)
                     layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
                         setMargins(0, topM, 0, dp(2))
                     }
@@ -4395,9 +4394,8 @@ class MainActivity : Activity() {
                     marginEnd = dp(-16)
                     topMargin = if (showTitles) dp(-24)
                         else if (isFirstOverall) dp(-24)
-                        else if (isBelowGroup && isFirstInGroup) {
-                            dp(-24) + (if (watchScroll.visibility == View.VISIBLE) spacing + dp(22) else spacing + dp(8))
-                        } else dp(-24) + spacing
+                        else if (isBelowGroup && isFirstInGroup) dp(-24) + spacing + dp(12)
+                        else dp(-24) + spacing
                     bottomMargin = bottomPull + maxOf(0, dp(76) - tileH) / 2
                 }
                 setOnScrollChangeListener { _, _, _, _, _ -> glass.kick(150) }
@@ -4542,7 +4540,7 @@ class MainActivity : Activity() {
 
         showNames()
         alignRow()
-        findViewById<TextView>(R.id.watchTitle)?.let { (it.layoutParams as? LinearLayout.LayoutParams)?.topMargin = maxOf(dp(12), rowSpacingPx() + dp(12)) }
+        findViewById<TextView>(R.id.watchTitle)?.let { (it.layoutParams as? LinearLayout.LayoutParams)?.topMargin = maxOf(dp(20), rowSpacingPx() + dp(18)) }
         if (takeFocus) (firstFocusedView ?: appRows.firstOrNull()?.getChildAt(1) ?: appRows.firstOrNull()?.getChildAt(0))?.requestFocus()
         if (!prefs.getBoolean("tip_move", false)) {
             prefs.edit().putBoolean("tip_move", true).apply()
