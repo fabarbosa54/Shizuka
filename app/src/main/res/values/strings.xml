@@ -475,6 +475,15 @@
     <string name="clock_pixel">Pixel stacked</string>
     <string name="clock_apple">Apple TV modern</string>
     <string name="clock_matrix">Dot matrix (LED)</string>
+    <string name="clock_seconds">Show seconds</string>
+    <string name="help_clock_seconds">Display seconds next to the time (smaller on the Dot matrix LED clock).</string>
+    <string name="backup_restore">Backup &amp; Restore</string>
+    <string name="help_backup_restore">Save or restore your Shizuka categories, inputs and settings.</string>
+    <string name="backup_export">Save configuration</string>
+    <string name="backup_import">Restore configuration</string>
+    <string name="backup_saved">Configuration saved successfully</string>
+    <string name="backup_restored">Configuration restored! Restarting…</string>
+    <string name="backup_not_found">No backup found</string>
     <string name="idle_clean">Auto photo frame</string>
     <string name="idle_clean_off">Off</string>
     <string name="idle_clean_2m">2 minutes</string>

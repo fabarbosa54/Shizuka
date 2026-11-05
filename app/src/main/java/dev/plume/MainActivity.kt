@@ -514,9 +514,118 @@ class MainActivity : Activity() {
         // static callback handler forever, so an Activity context here leaks the whole first home screen.
         applicationContext.getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(net)
         getSystemService(TvInputManager::class.java)?.registerCallback(inputCallback, ui)
+        getSystemService(android.hardware.input.InputManager::class.java)?.registerInputDeviceListener(inputDeviceListener, ui)
+        getSystemService(android.media.AudioManager::class.java)?.registerAudioDeviceCallback(audioDeviceCallback, ui)
 
         if (checkSelfPermission(TV_LISTINGS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(TV_LISTINGS), 1)
+        }
+    }
+
+    private val inputDeviceListener = object : android.hardware.input.InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) = updateDeviceBadges()
+        override fun onInputDeviceRemoved(deviceId: Int) = updateDeviceBadges()
+        override fun onInputDeviceChanged(deviceId: Int) = updateDeviceBadges()
+    }
+
+    private val audioDeviceCallback = object : android.media.AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out android.media.AudioDeviceInfo>?) = updateDeviceBadges()
+        override fun onAudioDevicesRemoved(removedDevices: Array<out android.media.AudioDeviceInfo>?) = updateDeviceBadges()
+    }
+
+    private fun updateDeviceBadges() {
+        val hasGamepad = android.view.InputDevice.getDeviceIds().any { id ->
+            val dev = android.view.InputDevice.getDevice(id) ?: return@any false
+            val s = dev.sources
+            (s and android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD ||
+                (s and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK
+        }
+        val audioMgr = getSystemService(android.media.AudioManager::class.java)
+        val hasHeadphones = audioMgr?.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)?.any { d ->
+            d.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                d.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                d.type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER ||
+                d.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                d.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                d.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET
+        } ?: false
+        findViewById<ImageView>(R.id.badgeGamepad)?.visibility = if (hasGamepad) View.VISIBLE else View.GONE
+        findViewById<ImageView>(R.id.badgeAudio)?.visibility = if (hasHeadphones) View.VISIBLE else View.GONE
+    }
+
+    private fun pickBackupRestore() {
+        val backupFile = File(getExternalFilesDir(null), "shizuka_backup.json")
+        val hasBackup = backupFile.isFile
+        showPage(getString(R.string.backup_restore), listOf(
+            page(getString(R.string.backup_export), if (hasBackup) "✓" else "") {
+                exportBackup(backupFile)
+                pickBackupRestore()
+            },
+            page(getString(R.string.backup_import), if (hasBackup) "${backupFile.length() / 1024 + 1} KB" else "") {
+                if (!backupFile.isFile) {
+                    toast(getString(R.string.backup_not_found))
+                } else {
+                    importBackup(backupFile)
+                }
+            }
+        )) { renderSettings(R.string.backup_restore) }
+    }
+
+    private fun exportBackup(file: File) {
+        try {
+            val root = org.json.JSONObject()
+            for ((k, v) in prefs.all) {
+                when (v) {
+                    is String -> root.put("s:$k", v)
+                    is Boolean -> root.put("b:$k", v)
+                    is Int -> root.put("i:$k", v)
+                    is Long -> root.put("l:$k", v)
+                    is Float -> root.put("f:$k", v.toDouble())
+                    is Set<*> -> {
+                        val arr = org.json.JSONArray()
+                        v.forEach { if (it is String) arr.put(it) }
+                        root.put("set:$k", arr)
+                    }
+                }
+            }
+            file.writeText(root.toString(2))
+            toast(getString(R.string.backup_saved), long = true)
+        } catch (e: Exception) {
+            toast("Error: ${e.message}")
+        }
+    }
+
+    private fun importBackup(file: File) {
+        try {
+            val root = org.json.JSONObject(file.readText())
+            val ed = prefs.edit()
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val rawKey = keys.next()
+                val type = rawKey.substringBefore(":")
+                val k = rawKey.substringAfter(":")
+                when (type) {
+                    "s" -> ed.putString(k, root.getString(rawKey))
+                    "b" -> ed.putBoolean(k, root.getBoolean(rawKey))
+                    "i" -> ed.putInt(k, root.getInt(rawKey))
+                    "l" -> ed.putLong(k, root.getLong(rawKey))
+                    "f" -> ed.putFloat(k, root.getDouble(rawKey).toFloat())
+                    "set" -> {
+                        val arr = root.getJSONArray(rawKey)
+                        val set = mutableSetOf<String>()
+                        for (i in 0 until arr.length()) set.add(arr.getString(i))
+                        ed.putStringSet(k, set)
+                    }
+                }
+            }
+            ed.commit()
+            GoogleNeonDrawable.theme = prefs.getString("glow", "google") ?: "google"
+            GoogleNeonDrawable.animMode = prefs.getString("glow_anim", "spin") ?: "spin"
+            GoogleNeonDrawable.glowThickness = prefs.getString("glow_thickness", "standard") ?: "standard"
+            toast(getString(R.string.backup_restored), long = true)
+            recreate()
+        } catch (e: Exception) {
+            toast("Error: ${e.message}")
         }
     }
 
@@ -552,6 +661,7 @@ class MainActivity : Activity() {
         if (appsDirty) refreshApps() else if (appRow.childCount == 0) renderApps()
         refreshWatchNext()
         showWeather()
+        updateDeviceBadges()
         ui.removeCallbacks(weatherTick)
         ui.post(weatherTick)
         ui.postDelayed(themeTick, 60_000L)
@@ -624,6 +734,8 @@ class MainActivity : Activity() {
         unregisterReceiver(packageReceiver)
         applicationContext.getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(net)
         getSystemService(TvInputManager::class.java)?.unregisterCallback(inputCallback)
+        getSystemService(android.hardware.input.InputManager::class.java)?.unregisterInputDeviceListener(inputDeviceListener)
+        getSystemService(android.media.AudioManager::class.java)?.unregisterAudioDeviceCallback(audioDeviceCallback)
         upload?.stop()
         try {
             contentResolver.unregisterContentObserver(photoObserver)
@@ -1092,16 +1204,29 @@ class MainActivity : Activity() {
         else -> Typeface.create("sans-serif-light", Typeface.NORMAL)
     }
 
+    private fun clockSecondsOn(): Boolean {
+        val style = prefs.getString("clock_style", "light")
+        return prefs.getBoolean("clock_seconds", style == "matrix")
+    }
+
     private fun updateClockFormat() {
         val clock = findViewById<android.widget.TextClock>(R.id.clock) ?: return
         val style = prefs.getString("clock_style", "light")
+        val showSec = clockSecondsOn()
         if (style == "pixel") {
             clock.format12Hour = "h\nmm"
             clock.format24Hour = "HH\nmm"
             clock.setLineSpacing(0f, 0.82f)
-        } else if (style == "matrix") {
-            clock.format12Hour = "h:mm:ss"
-            clock.format24Hour = "HH:mm:ss"
+        } else if (showSec) {
+            val scale = if (style == "matrix") 0.62f else 0.68f
+            val f12 = SpannableString("h:mm:ss").apply {
+                setSpan(android.text.style.RelativeSizeSpan(scale), 4, 7, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            val f24 = SpannableString("HH:mm:ss").apply {
+                setSpan(android.text.style.RelativeSizeSpan(scale), 5, 8, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            clock.format12Hour = f12
+            clock.format24Hour = f24
             clock.setLineSpacing(0f, 1f)
         } else {
             clock.format12Hour = "h:mm"
@@ -1133,6 +1258,8 @@ class MainActivity : Activity() {
         for (id in intArrayOf(R.id.clock, R.id.date, R.id.appsTitle, R.id.watchTitle, R.id.allAppsTitle, R.id.rowLabel, R.id.weather, R.id.featured, R.id.inputLabel)) {
             findViewById<TextView>(id)?.setTextColor(fg)
         }
+        findViewById<ImageView>(R.id.badgeGamepad)?.setColorFilter(fg)
+        findViewById<ImageView>(R.id.badgeAudio)?.setColorFilter(fg)
         iconInk = fg
         for (v in topIcons()) v.setColorFilter(if (v.isFocused) fg else iconInk)
         watchInk = fg
@@ -1157,6 +1284,8 @@ class MainActivity : Activity() {
         val top = listOf(R.id.clock, R.id.date, R.id.weather, R.id.featured).map { findViewById<TextView>(it) }
         val topInk = inkBehind(top)
         for (v in top) ink(v, topInk, fade = true, strong = true)
+        findViewById<ImageView>(R.id.badgeGamepad)?.setColorFilter(topInk)
+        findViewById<ImageView>(R.id.badgeAudio)?.setColorFilter(topInk)
         findViewById<FittingLabel>(R.id.inputLabel)?.let { ink(it, topInk, fade = true, strong = true) }
         val icons = topIcons()
         iconInk = inkBehind(icons)
@@ -1196,9 +1325,12 @@ class MainActivity : Activity() {
         watchInk = inkBehind(watch)
         for (v in watch) ink(v, watchInk, fade = true)
         // The progress bar and the source mark go with the card's text.
-        for (col in cols) for (i in 0 until col.childCount) when (val v = col.getChildAt(i)) {
-            is ProgressBar -> v.progressDrawable = progressBarDrawable(watchInk)
-            is TextView -> if (v.tag == INK_MARK) v.compoundDrawablesRelative[0]?.setTint(watchInk)
+        for (col in cols) {
+            val pkg = (col.getChildAt(0)?.getTag(R.id.watchRow) as? Prog)?.pkg
+            for (i in 0 until col.childCount) when (val v = col.getChildAt(i)) {
+                is ProgressBar -> v.progressDrawable = progressBarDrawable(watchInk, pkg)
+                is TextView -> if (v.tag == INK_MARK) v.compoundDrawablesRelative[0]?.setTint(watchInk)
+            }
         }
     }
 
@@ -3037,6 +3169,15 @@ class MainActivity : Activity() {
             R.string.clock_style to Triple(getString(R.string.clock_style), getString(CLOCK_STYLES.getValue(prefs.getString("clock_style", "light")!!))) {
                 steps[R.string.clock_style]!!(1)
             },
+            R.string.clock_seconds to Triple(getString(R.string.clock_seconds), toggle(clockSecondsOn())) {
+                prefs.edit().putBoolean("clock_seconds", !clockSecondsOn()).apply()
+                updateClockFormat()
+                findViewById<View>(R.id.clock).post { fitInk() }
+                renderSettings(R.string.clock_seconds)
+            },
+            R.string.backup_restore to Triple(getString(R.string.backup_restore), "") {
+                pickBackupRestore()
+            },
             // "weather" is off/c/f as before; "wx_unit" keeps the unit while it's off.
             R.string.weather to Triple(getString(R.string.weather), toggle(weather != "off")) {
                 if (weather == "off") prefs.edit().putString("weather", unit).apply()
@@ -3106,7 +3247,7 @@ class MainActivity : Activity() {
             Triple(R.string.bottom_row, "${rowName()} · ${rows[R.string.show_row]!!.second}", listOfNotNull(R.string.show_row, R.string.apps_when_hidden.takeIf { rowShow() != "always" },
                 R.string.row_name, R.string.show_icons, R.string.cw_apps, R.string.cw_channels, R.string.restore_hidden)),
             Triple(R.string.section_clock_weather, if (weather == "off") on(false) else "${rows[R.string.weather_units]!!.second} · ${prefs.getString("geo_city", null) ?: rows[R.string.weather_location]!!.second}",
-                listOf(R.string.clock_style, R.string.clock_size, R.string.weather, R.string.weather_units, R.string.weather_location)),
+                listOf(R.string.clock_style, R.string.clock_size, R.string.clock_seconds, R.string.weather, R.string.weather_units, R.string.weather_location)),
             Triple(R.string.section_screensaver, rows[R.string.screensaver]!!.second, listOf(R.string.screensaver, R.string.idle_clean, R.string.test_screensaver, R.string.screensaver_timing)),
             // Home app is Android TV's own way (Google TV and Fire OS keep their home); Fire OS never passes keys to us, so no smooth volume there.
             Triple(R.string.section_remote_home, if (homeSetUp()) getString(R.string.home_button) else on(false),
@@ -3177,6 +3318,8 @@ class MainActivity : Activity() {
             listOf(R.string.bottom_row, R.string.section_clock_weather, R.string.section_screensaver).map(sectionRow) +
             group(R.string.group_tv) +
             sectionRow(R.string.section_remote_home) +
+            Triple(R.string.backup_restore, page(getString(R.string.backup_restore), "›") { pickBackupRestore() },
+                RowStyle(R.drawable.ms_folder, help = getString(R.string.help_backup_restore))) +
             Triple(R.string.lock_layout, rows[R.string.lock_layout]!!, RowStyle(R.drawable.ms_lock, help = getString(R.string.lock_note))) +
             Triple(R.string.updates, rows[R.string.updates]!!.let { (t, _, a) -> page(t, "›", a) },
                 RowStyle(R.drawable.ms_system_update, rows[R.string.updates]!!.second, help = getString(R.string.help_updates))) +
@@ -4209,8 +4352,8 @@ class MainActivity : Activity() {
                     alpha = 0.75f
                     val topM = if (isFirstOverall) 0
                         else if (isBelowGroup && isFirstInGroup) {
-                            if (watchScroll.visibility == View.VISIBLE) spacing + dp(12) else spacing
-                        } else spacing
+                            if (watchScroll.visibility == View.VISIBLE) spacing + dp(22) else spacing + dp(8)
+                        } else spacing + dp(6)
                     layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
                         setMargins(0, topM, 0, dp(2))
                     }
@@ -4225,14 +4368,14 @@ class MainActivity : Activity() {
                 setPadding(dp(16), dp(24), dp(16), dp(24))
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
-                val bottomPull = if (rowNames() == "never") dp(-24) else dp(-36)
+                val bottomPull = if (rowNames() == "never") dp(-22) else dp(-26)
                 layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
                     marginStart = dp(-16)
                     marginEnd = dp(-16)
                     topMargin = if (showTitles) dp(-24)
                         else if (isFirstOverall) dp(-24)
                         else if (isBelowGroup && isFirstInGroup) {
-                            dp(-24) + (if (watchScroll.visibility == View.VISIBLE) spacing + dp(12) else spacing)
+                            dp(-24) + (if (watchScroll.visibility == View.VISIBLE) spacing + dp(22) else spacing + dp(8))
                         } else dp(-24) + spacing
                     bottomMargin = bottomPull + maxOf(0, dp(76) - tileH) / 2
                 }
@@ -4534,7 +4677,7 @@ class MainActivity : Activity() {
                 val focusedRow = currentFocus?.let { findAppRowFor(it) }
                 categoryTitleViews.forEachIndexed { i, titleView ->
                     val isFocused = focusedRow != null && focusedRow === appRows.getOrNull(i)
-                    titleView.alpha = if (isFocused) 0f else 0.75f
+                    titleView.alpha = if (isFocused) 1f else 0.72f
                 }
             }
             if (watchScroll.visibility == View.VISIBLE) {
@@ -4547,7 +4690,7 @@ class MainActivity : Activity() {
         appScrollers.forEach { scroller ->
             val parentTop = (scroller.parent as? View)?.top ?: 0
             val topInViewport = (parentTop + scroller.top) - scrollY
-            val fade = (topInViewport.toFloat() / dp(40)).coerceIn(0f, 1f)
+            val fade = ((topInViewport + dp(35)).toFloat() / dp(65)).coerceIn(0f, 1f)
             scroller.alpha = fade
         }
         if (CategoryManager.showTitles(prefs)) {
@@ -4556,17 +4699,17 @@ class MainActivity : Activity() {
                 val parentTop = (titleView.parent as? View)?.top ?: 0
                 val topInViewport = (parentTop + titleView.top) - scrollY
                 val isFocused = focusedRow != null && focusedRow === appRows.getOrNull(i)
-                val baseAlpha = if (isFocused) 0f else 0.75f
-                val titleFade = (topInViewport.toFloat() / dp(30)).coerceIn(0f, 1f)
+                val baseAlpha = if (isFocused) 1f else 0.72f
+                val titleFade = ((topInViewport + dp(15)).toFloat() / dp(40)).coerceIn(0f, 1f)
                 titleView.alpha = baseAlpha * titleFade
             }
         }
         if (watchScroll.visibility == View.VISIBLE) {
             val watchTopInViewport = watchScroll.top - scrollY
-            val watchFade = (watchTopInViewport.toFloat() / dp(40)).coerceIn(0f, 1f)
+            val watchFade = ((watchTopInViewport + dp(35)).toFloat() / dp(65)).coerceIn(0f, 1f)
             watchScroll.alpha = watchFade
             val watchTitleTopInViewport = watchTitle.top - scrollY
-            val titleFade = (watchTitleTopInViewport.toFloat() / dp(30)).coerceIn(0f, 1f)
+            val titleFade = ((watchTitleTopInViewport + dp(15)).toFloat() / dp(40)).coerceIn(0f, 1f)
             watchTitle.alpha = titleAlpha * titleFade
         }
     }
@@ -4585,8 +4728,8 @@ class MainActivity : Activity() {
                 categoryTitleViews.forEachIndexed { i, titleView ->
                     val parentTop = (titleView.parent as? View)?.top ?: 0
                     val topInViewport = (parentTop + titleView.top) - scrollY
-                    val scrollFade = ((topInViewport + dp(20)).toFloat() / dp(40)).coerceIn(0f, 1f)
-                    val targetAlpha = if (i == rowIdx) 0f else 0.75f * scrollFade
+                    val scrollFade = ((topInViewport + dp(15)).toFloat() / dp(40)).coerceIn(0f, 1f)
+                    val targetAlpha = (if (i == rowIdx) 1f else 0.72f) * scrollFade
                     if (titleView.alpha != targetAlpha) {
                         titleView.animate().alpha(targetAlpha).setDuration(160).start()
                     }
@@ -4598,8 +4741,8 @@ class MainActivity : Activity() {
                         categoryTitleViews.forEach { titleView ->
                             val parentTop = (titleView.parent as? View)?.top ?: 0
                             val topInViewport = (parentTop + titleView.top) - scrollY
-                            val scrollFade = ((topInViewport + dp(20)).toFloat() / dp(40)).coerceIn(0f, 1f)
-                            val targetAlpha = 0.75f * scrollFade
+                            val scrollFade = ((topInViewport + dp(15)).toFloat() / dp(40)).coerceIn(0f, 1f)
+                            val targetAlpha = 0.72f * scrollFade
                             if (titleView.alpha != targetAlpha) {
                                 titleView.animate().alpha(targetAlpha).setDuration(160).start()
                             }
@@ -6768,9 +6911,9 @@ class MainActivity : Activity() {
         col.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             progress = p.progress
-            progressDrawable = progressBarDrawable(watchInk)
+            progressDrawable = progressBarDrawable(watchInk, p.pkg)
             visibility = if (p.progress > 0) View.VISIBLE else View.INVISIBLE
-        }, LinearLayout.LayoutParams(w, dp(3)).apply { topMargin = dp(8) })
+        }, LinearLayout.LayoutParams(w, dp(4)).apply { topMargin = dp(8) })
         col.addView(title)
         val icon = sourceIcon(p.pkg)
         if (p.sub.isNotEmpty() || icon != null) {
@@ -6792,11 +6935,28 @@ class MainActivity : Activity() {
     }
 
     /** [ink] fills it; the track is a faint version on the same side, light behind white and dark behind near-black. */
-    private fun progressBarDrawable(ink: Int = fg): Drawable {
-        fun bar(color: Int) = GradientDrawable().apply { cornerRadius = dp(2).toFloat(); setColor(color) }
+    private fun progressBarDrawable(ink: Int = fg, pkg: String? = null): Drawable {
+        val brandColor = pkg?.let { BRAND_COLOURS[it] }
+        val glowColors = when (prefs.getString("glow", "google")) {
+            "aurora" -> intArrayOf(0xFF00E676.toInt(), 0xFF00E5FF.toInt())
+            "sunset" -> intArrayOf(0xFFFF6D00.toInt(), 0xFFFF4081.toInt())
+            "ocean" -> intArrayOf(0xFF00B0FF.toInt(), 0xFF1DE9B6.toInt())
+            "fire" -> intArrayOf(0xFFFF3D00.toInt(), 0xFFFFD600.toInt())
+            "cyber" -> intArrayOf(0xFFFF007F.toInt(), 0xFF00F0FF.toInt())
+            "white" -> intArrayOf(0xFFE0E6ED.toInt(), 0xFFFFFFFF.toInt())
+            "accent" -> intArrayOf(accentColor, accentColor)
+            else -> if (brandColor != null) intArrayOf(brandColor, brandColor) else intArrayOf(0xFF4285F4.toInt(), 0xFFEA4335.toInt())
+        }
+        val track = GradientDrawable().apply {
+            cornerRadius = dp(2).toFloat()
+            setColor(if (Color.luminance(ink) > 0.5f) 0x38FFFFFF else 0x26000000)
+        }
+        val fill = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, glowColors).apply {
+            cornerRadius = dp(2).toFloat()
+        }
         return LayerDrawable(arrayOf(
-            bar(if (Color.luminance(ink) > 0.5f) 0x40FFFFFF else 0x26000000),
-            ClipDrawable(bar(accentColor), Gravity.START, ClipDrawable.HORIZONTAL),
+            track,
+            ClipDrawable(fill, Gravity.START, ClipDrawable.HORIZONTAL),
         )).apply {
             setId(0, android.R.id.background)
             setId(1, android.R.id.progress)
@@ -7027,7 +7187,8 @@ class MainActivity : Activity() {
             R.string.show_row to R.drawable.ms_visibility, R.string.apps_when_hidden to R.drawable.ms_vertical_align_bottom, R.string.row_name to R.drawable.ms_edit,
             R.string.show_icons to R.drawable.ms_badge, R.string.cw_apps to R.drawable.ms_widgets, R.string.cw_channels to R.drawable.ms_podcasts,
             R.string.restore_hidden to R.drawable.ms_visibility_off,
-            R.string.clock_style to R.drawable.ms_schedule, R.string.clock_size to R.drawable.ms_format_size, R.string.weather to R.drawable.ms_partly_cloudy_day, R.string.weather_units to R.drawable.ms_thermostat, R.string.weather_location to R.drawable.ms_location_on,
+            R.string.clock_style to R.drawable.ms_schedule, R.string.clock_size to R.drawable.ms_format_size, R.string.clock_seconds to R.drawable.ms_timer, R.string.weather to R.drawable.ms_partly_cloudy_day, R.string.weather_units to R.drawable.ms_thermostat, R.string.weather_location to R.drawable.ms_location_on,
+            R.string.backup_restore to R.drawable.ms_folder,
             R.string.screensaver to R.drawable.ms_bedtime, R.string.idle_clean to R.drawable.ms_bedtime, R.string.test_screensaver to R.drawable.ms_play_circle, R.string.screensaver_timing to R.drawable.ms_timer,
             R.string.home_button to R.drawable.ms_home, R.string.default_launcher to R.drawable.ms_home_app_logo, R.string.smooth_volume to R.drawable.ms_volume_up,
             R.string.section_keys to R.drawable.ms_keyboard, R.string.setup_home to R.drawable.ms_restart_alt,
@@ -7042,7 +7203,8 @@ class MainActivity : Activity() {
             R.string.section_style to R.string.help_style, R.string.section_clock_weather to R.string.help_clock_weather,
             R.string.theme to R.string.help_theme, R.string.glass to R.string.help_glass, R.string.app_animations to R.string.help_app_animations,
             R.string.app_names to R.string.help_app_names, R.string.row_position to R.string.help_row_position, R.string.show_row to R.string.help_show_row,
-            R.string.clock_style to R.string.help_clock_style, R.string.clock_size to R.string.help_clock_size, R.string.weather to R.string.help_weather, R.string.weather_units to R.string.help_units, R.string.screensaver to R.string.help_screensaver_pick,
+            R.string.clock_style to R.string.help_clock_style, R.string.clock_size to R.string.help_clock_size, R.string.clock_seconds to R.string.help_clock_seconds, R.string.weather to R.string.help_weather, R.string.weather_units to R.string.help_units, R.string.screensaver to R.string.help_screensaver_pick,
+            R.string.backup_restore to R.string.help_backup_restore,
             R.string.idle_clean to R.string.help_screensaver_pick,
             R.string.test_screensaver to R.string.help_preview, R.string.folder_photo_changes to R.string.help_photo_every,
             R.string.section_app_row to R.string.help_apps_row, R.string.bottom_row to R.string.help_shows_row,
