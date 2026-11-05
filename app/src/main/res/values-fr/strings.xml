@@ -383,6 +383,7 @@
     <string name="glow_thickness_bold">Intense</string>
     <string name="clock_pixel">Style Pixel (2 lignes)</string>
     <string name="clock_apple">Moderne (Apple TV)</string>
+    <string name="clock_matrix">Matrice de points (LED)</string>
     <string name="idle_clean">Cadre photo automatique</string>
     <string name="idle_clean_off">Désactivé</string>
     <string name="idle_clean_2m">Après 2 min</string>

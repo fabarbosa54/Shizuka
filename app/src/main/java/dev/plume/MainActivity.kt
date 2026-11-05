@@ -1088,6 +1088,7 @@ class MainActivity : Activity() {
         "serif" -> resources.getFont(R.font.clock_serif) // Fraunces, OFL
         "pixel" -> Typeface.create("sans-serif-black", Typeface.NORMAL)
         "apple" -> Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        "matrix" -> resources.getFont(R.font.clock_matrix)
         else -> Typeface.create("sans-serif-light", Typeface.NORMAL)
     }
 
@@ -1098,6 +1099,10 @@ class MainActivity : Activity() {
             clock.format12Hour = "h\nmm"
             clock.format24Hour = "HH\nmm"
             clock.setLineSpacing(0f, 0.82f)
+        } else if (style == "matrix") {
+            clock.format12Hour = "h:mm:ss"
+            clock.format24Hour = "HH:mm:ss"
+            clock.setLineSpacing(0f, 1f)
         } else {
             clock.format12Hour = "h:mm"
             clock.format24Hour = "HH:mm"
@@ -7063,7 +7068,8 @@ class MainActivity : Activity() {
             "bold" to R.string.clock_bold,
             "serif" to R.string.clock_serif,
             "pixel" to R.string.clock_pixel,
-            "apple" to R.string.clock_apple
+            "apple" to R.string.clock_apple,
+            "matrix" to R.string.clock_matrix,
         )
         val GLOW_ANIMS = linkedMapOf(
             "spin" to R.string.glow_anim_spin,

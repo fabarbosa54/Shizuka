@@ -474,6 +474,7 @@
     <string name="glow_thickness_bold">Bold</string>
     <string name="clock_pixel">Pixel stacked</string>
     <string name="clock_apple">Apple TV modern</string>
+    <string name="clock_matrix">Dot matrix (LED)</string>
     <string name="idle_clean">Auto photo frame</string>
     <string name="idle_clean_off">Off</string>
     <string name="idle_clean_2m">2 minutes</string>
