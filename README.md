@@ -9,11 +9,29 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-blue">
   <img alt="Android 8.0+" src="https://img.shields.io/badge/Android-8.0%2B-3ddc84">
   <img alt="APK size" src="https://img.shields.io/badge/APK-~0.4%20MB-blue">
   <a href="LICENSE"><img alt="GPL-3.0 License" src="https://img.shields.io/github/license/fabarbosa54/Shizuka"></a>
   <a href="https://github.com/fabarbosa54/Shizuka"><img alt="GitHub Repo" src="https://img.shields.io/badge/GitHub-fabarbosa54%2FShizuka-181717?logo=github"></a>
+</p>
+
+---
+
+## 📸 Aperçu & Démonstration
+
+<p align="center">
+  <img src="docs/shizuka01.png" alt="Aperçu Shizuka Launcher 1" width="49%">
+  <img src="docs/shizuka02.png" alt="Aperçu Shizuka Launcher 2" width="49%">
+</p>
+
+### 🎬 Animation des tiroirs de flux en cascade
+<p align="center">
+  <a href="docs/vignettes.mp4">
+    <img src="docs/vignettes.gif" alt="Démonstration des tiroirs de vignettes en cascade" width="90%">
+  </a>
+  <br>
+  <em>Cliquez sur l'aperçu animé pour ouvrir la vidéo haute définition (<a href="docs/vignettes.mp4">vignettes.mp4</a>).</em>
 </p>
 
 ---
@@ -35,7 +53,13 @@ Le tout en conservant l'ADN initial : **0 dépendance superflue**, performance m
 
 ---
 
-## ✨ Fonctionnalités ajoutées dans Shizuka (v1.0.0)
+## ✨ Fonctionnalités ajoutées dans Shizuka (v1.1.0)
+
+### 🎬 0. Tiroirs de flux dynamiques par application (Nouveau en v1.1.0)
+- Sélectionnez une application vidéo (**YouTube**, **SmartTube**, **Netflix**, **Prime Video**, **Disney+**, **Crunchyroll**, **ADN**, **Shadowz**, **RTP Play**, **OQEE by Free**) pour déployer automatiquement ses recommandations ou reprises de lecture sous la ligne, avec une **animation en cascade fluide**.
+- **Sélecteur de canaux par application** accessible via un appui long sur l'icône (**Flux du tiroir**) ou depuis les paramètres.
+- **Jauge de délai configurable** de **0.5 s à 3.0 s** avant l'ouverture du tiroir.
+- **Mode veille plein écran** : l'horloge, la date et la météo s'agrandissent et glissent au centre de l'écran en mode cadre photo.
 
 ### 🌈 1. Lueurs de sélection néon personnalisées
 Personnalisez le contour lumineux autour des tuiles sélectionnées avec un aperçu en temps réel :
