@@ -4615,9 +4615,21 @@ class MainActivity : Activity() {
                     if (focused) {
                         lastApp = v
                         scrollToView(v)
+                        pendingYtDrawerShow?.let { ui.removeCallbacks(it) }
+                        pendingYtDrawerShow = null
                         if (isYoutubeOrSmartTube(a.pkg) && ytDrawerScroller != null && ytDrawerRow != null) {
                             if (feedForApp(a.pkg).isNotEmpty()) {
-                                showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
+                                if (activeYtDrawer === ytDrawerScroller && ytDrawerScroller.visibility == View.VISIBLE && currentYtPkg == a.pkg) {
+                                    showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
+                                } else {
+                                    val task = Runnable {
+                                        if (currentFocus === v && v.isAttachedToWindow) {
+                                            showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
+                                        }
+                                    }
+                                    pendingYtDrawerShow = task
+                                    ui.postDelayed(task, 2500L)
+                                }
                             } else {
                                 hideYtDrawerIfNeeded()
                             }
@@ -4625,6 +4637,8 @@ class MainActivity : Activity() {
                             hideYtDrawerIfNeeded()
                         }
                     } else {
+                        pendingYtDrawerShow?.let { ui.removeCallbacks(it) }
+                        pendingYtDrawerShow = null
                         ui.post { checkYtDrawerFocus() }
                     }
                     showRowLabel(v, focused)
@@ -7040,12 +7054,12 @@ class MainActivity : Activity() {
                 for (idx in 0 until drawerRow.childCount) {
                     val cardCol = drawerRow.getChildAt(idx)
                     cardCol.alpha = 0f
-                    cardCol.translationY = dp(12).toFloat()
+                    cardCol.translationY = dp(16).toFloat()
                     cardCol.animate()
                         .alpha(1f)
                         .translationY(0f)
-                        .setStartDelay((idx * 25L).coerceAtMost(150L))
-                        .setDuration(200)
+                        .setStartDelay((idx * 80L).coerceAtMost(600L))
+                        .setDuration(350)
                         .setInterpolator(DECELERATE)
                         .start()
                 }
@@ -7062,22 +7076,22 @@ class MainActivity : Activity() {
             drawerScroller.alpha = if (targetH > 0) startH.toFloat() / targetH else 0f
             drawerScroller.requestLayout()
 
-            // Cascade sur les cartes
+            // Cascade plus lente et élégante sur les cartes
             for (idx in 0 until drawerRow.childCount) {
                 val cardCol = drawerRow.getChildAt(idx)
                 cardCol.alpha = 0f
-                cardCol.translationY = dp(14).toFloat()
+                cardCol.translationY = dp(20).toFloat()
                 cardCol.animate()
                     .alpha(1f)
                     .translationY(0f)
-                    .setStartDelay(40L + (idx * 25L).coerceAtMost(150L))
-                    .setDuration(220)
+                    .setStartDelay(80L + (idx * 90L).coerceAtMost(700L))
+                    .setDuration(400)
                     .setInterpolator(DECELERATE)
                     .start()
             }
 
             ytDrawerAnim = ValueAnimator.ofInt(startH, targetH).apply {
-                duration = 240
+                duration = 320
                 interpolator = DECELERATE
                 addUpdateListener { anim ->
                     val h = anim.animatedValue as Int
@@ -7099,6 +7113,8 @@ class MainActivity : Activity() {
     }
 
     private fun hideYtDrawerIfNeeded() {
+        pendingYtDrawerShow?.let { ui.removeCallbacks(it) }
+        pendingYtDrawerShow = null
         val drawer = activeYtDrawer ?: return
         if (drawer.visibility == View.GONE) return
         ytDrawerAnim?.cancel()
@@ -7375,6 +7391,7 @@ class MainActivity : Activity() {
     private var activeYtParentRow: LinearLayout? = null
     private var currentYtPkg: String? = null
     private var ytDrawerAnim: ValueAnimator? = null
+    private var pendingYtDrawerShow: Runnable? = null
 
     /** "always", "down" (hidden until Down reaches it) or "never". */
     private fun rowShow() = prefs.getString("row_show", "always")!!.takeIf { it in ROW_SHOW } ?: "always"
