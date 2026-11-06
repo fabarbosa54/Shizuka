@@ -509,7 +509,7 @@
     <string name="hide_app">Hide application</string>
     <string name="app_hidden">Application hidden</string>
     <string name="help_focus_dimming">Slightly dim unselected rows to guide the eye to the active row.</string>
-    <string name="yt_drawer_channels">YouTube drawer channels</string>
-    <string name="help_yt_drawer_channels">Choose which YouTube and SmartTube channels appear in the expandable drawer.</string>
+    <string name="yt_drawer_channels">App drawer channels</string>
+    <string name="help_yt_drawer_channels">Choose which Continue Watching feeds and channels appear in the expandable app drawers.</string>
     <string name="yt_drawer_feed">Drawer feed</string>
 </resources>

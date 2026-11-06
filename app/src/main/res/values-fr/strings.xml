@@ -418,7 +418,7 @@
     <string name="hide_app">Masquer l\'application</string>
     <string name="app_hidden">Application masquée</string>
     <string name="help_focus_dimming">Estompe légèrement les lignes non sélectionnées pour mettre en valeur la ligne active.</string>
-    <string name="yt_drawer_channels">Canaux du tiroir YouTube</string>
-    <string name="help_yt_drawer_channels">Choisissez les flux YouTube et SmartTube affichés dans le tiroir déroulant.</string>
+    <string name="yt_drawer_channels">Flux des tiroirs d\'applications</string>
+    <string name="help_yt_drawer_channels">Choisissez les flux (Reprendre la lecture et chaînes) affichés dans le tiroir déroulant sous chaque application.</string>
     <string name="yt_drawer_feed">Flux du tiroir</string>
 </resources>

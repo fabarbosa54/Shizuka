@@ -3048,7 +3048,7 @@ class MainActivity : Activity() {
         val rowHidden = rowHiddenSet().count { pkg -> apps.any { it.pkg == pkg } }
         val chFlip = prefs.getStringSet("ch_flip", emptySet())!!
         val channelsOn = (if (WATCH_NEXT in chFlip) 0 else 1) + appChannels().distinctBy { (_, p, n) -> channelKey(p, n) }.count { (_, p, n) -> channelOn(n, channelKey(p, n), chFlip) }
-        val ytChannelsOn = appChannels().distinctBy { (_, p, n) -> channelKey(p, n) }.count { (_, p, n) -> isYoutubeOrSmartTube(p) && ytChannelOn(p, n) }
+        val ytChannelsOn = youtubeFeed.mapNotNull { it.pkg }.distinct().size
         val names = rowNames()
         // Rows with more than two values also step back with Left; two-value rows flip either way.
         val steps = mutableMapOf<Int, (Int) -> Unit>(
@@ -4517,41 +4517,34 @@ class MainActivity : Activity() {
             }
             appNameRows.add(thisNameRow)
 
-            val hasYt = catPkgs.any { isYoutubeOrSmartTube(it) }
-            val ytDrawerScroller = if (hasYt) {
-                SnapScrollView(this, null).apply {
-                    id = View.generateViewId()
-                    isFocusable = false
-                    visibility = View.GONE
-                    alpha = 0f
-                    clipToPadding = false
-                    isVerticalScrollBarEnabled = false
-                    isHorizontalScrollBarEnabled = false
-                    setPadding(dp(16), dp(8), dp(16), dp(18))
-                    layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-                        marginStart = dp(-16)
-                        marginEnd = dp(-16)
-                        topMargin = dp(4)
-                    }
+            val ytDrawerScroller = SnapScrollView(this, null).apply {
+                id = View.generateViewId()
+                isFocusable = false
+                visibility = View.GONE
+                alpha = 0f
+                clipToPadding = false
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+                setPadding(dp(16), dp(8), dp(16), dp(18))
+                layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                    marginStart = dp(-16)
+                    marginEnd = dp(-16)
+                    topMargin = dp(4)
                 }
-            } else null
-            val ytDrawerRow = if (hasYt) {
-                LinearLayout(this).apply {
-                    id = View.generateViewId()
-                    layoutParams = FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
-                    clipChildren = false
-                    orientation = LinearLayout.HORIZONTAL
-                }.also { ytDrawerScroller?.addView(it) }
-            } else null
+            }
+            val ytDrawerRow = LinearLayout(this).apply {
+                id = View.generateViewId()
+                layoutParams = FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
+                clipChildren = false
+                orientation = LinearLayout.HORIZONTAL
+            }.also { ytDrawerScroller.addView(it) }
 
             content.addView(thisRow)
             content.addView(thisLabel)
             content.addView(thisNameRow)
             scroller.addView(content)
             targetContainer.addView(scroller)
-            if (ytDrawerScroller != null) {
-                targetContainer.addView(ytDrawerScroller)
-            }
+            targetContainer.addView(ytDrawerScroller)
 
             // Gear button at index 0 of row (Projectivy style)
             val gearW = minOf(tileH, dp(54))
@@ -4617,24 +4610,20 @@ class MainActivity : Activity() {
                         scrollToView(v)
                         pendingYtDrawerShow?.let { ui.removeCallbacks(it) }
                         pendingYtDrawerShow = null
-                        if (isYoutubeOrSmartTube(a.pkg) && ytDrawerScroller != null && ytDrawerRow != null) {
-                            if (activeYtDrawer != null && activeYtDrawer !== ytDrawerScroller) {
-                                hideYtDrawerIfNeeded()
-                            }
-                            if (activeYtDrawer === ytDrawerScroller && ytDrawerScroller.visibility == View.VISIBLE) {
-                                showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
-                            } else {
-                                val task = Runnable {
-                                    pendingYtDrawerShow = null
-                                    if (currentFocus === v && v.isAttachedToWindow && feedForApp(a.pkg).isNotEmpty()) {
-                                        showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
-                                    }
-                                }
-                                pendingYtDrawerShow = task
-                                ui.postDelayed(task, 2000L)
-                            }
-                        } else {
+                        if (activeYtDrawer != null && (activeYtDrawer !== ytDrawerScroller || currentYtPkg != a.pkg)) {
                             hideYtDrawerIfNeeded()
+                        }
+                        if (activeYtDrawer === ytDrawerScroller && ytDrawerScroller.visibility == View.VISIBLE && currentYtPkg == a.pkg) {
+                            showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
+                        } else if (!a.pkg.startsWith(HDMI)) {
+                            val task = Runnable {
+                                pendingYtDrawerShow = null
+                                if (currentFocus === v && v.isAttachedToWindow && feedForApp(a.pkg).isNotEmpty()) {
+                                    showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
+                                }
+                            }
+                            pendingYtDrawerShow = task
+                            ui.postDelayed(task, 1500L)
                         }
                     } else {
                         pendingYtDrawerShow?.let { ui.removeCallbacks(it) }
@@ -5225,7 +5214,7 @@ class MainActivity : Activity() {
                     }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (activeYtDrawer?.visibility == View.VISIBLE &&
-                            currentRow === activeYtParentRow && isYoutubeOrSmartTube(v.tag as? String) &&
+                            currentRow === activeYtParentRow && v.tag == currentYtPkg &&
                             (activeYtRow?.childCount ?: 0) > 0
                         ) {
                             val target = (activeYtRow!!.getChildAt(0) as? ViewGroup)?.getChildAt(0) ?: v
@@ -5406,7 +5395,7 @@ class MainActivity : Activity() {
         val cats = categoriesList()
         holdMenu(v, listOfNotNull(
             getString(R.string.move) to { startEdit(grab = v, once = true) },
-            if (isYoutubeOrSmartTube(pkg)) getString(R.string.yt_drawer_feed) to {
+            if (canHaveDrawer(pkg)) getString(R.string.yt_drawer_feed) to {
                 openLauncherSettings()
                 pickYtChannels(forPkg = pkg, fromAppMenu = true)
             } else null,
@@ -6922,17 +6911,49 @@ class MainActivity : Activity() {
         return pkg.contains("youtube", ignoreCase = true) || pkg.contains("smarttube", ignoreCase = true)
     }
 
-    private fun ytChannelOn(pkg: String, name: String): Boolean {
-        val saved = prefs.getStringSet("yt_channels", null)
-        if (saved != null) return channelKey(pkg, name) in saved
-        // Par défaut (si l'utilisateur n'a encore rien configuré), on active uniquement les canaux Recommandations / Accueil / Abonnements
+    private fun canHaveDrawer(pkg: String?): Boolean {
+        if (pkg == null || pkg.startsWith(HDMI) || pkg == packageName) return false
+        if (isYoutubeOrSmartTube(pkg)) return true
+        if (youtubeFeed.any { it.pkg == pkg }) return true
+        if (appChannels().any { it.second == pkg }) return true
+        val streamKeywords = listOf(
+            "video", "tv", "stream", "media", "netflix", "youtube", "smarttube", "disney", "prime", "amazon",
+            "plex", "kodi", "jellyfin", "vlc", "canal", "molotov", "max", "paramount", "arte", "hbo",
+            "crunchyroll", "adn", "shadowz", "rtp", "stremio", "twitch", "france", "tf1", "m6", "oqee", "free"
+        )
+        return pkg in publishingPkgs || streamKeywords.any { pkg.contains(it, ignoreCase = true) }
+    }
+
+    private fun defaultYtChannelOn(pkg: String, name: String): Boolean {
+        if (name == WATCH_NEXT) return !isYoutubeOrSmartTube(pkg)
         val n = name.lowercase()
-        return "recommend" in n || "recommand" in n || "accueil" in n || "home" in n || "subscri" in n || "abonn" in n
+        if (isYoutubeOrSmartTube(pkg)) {
+            return "recommend" in n || "recommand" in n || "accueil" in n || "home" in n || "subscri" in n || "abonn" in n
+        }
+        return "continue" in n || "reprendre" in n || "lecture" in n || "on deck" in n || "en cours" in n ||
+            "next" in n || "suivre" in n || "watchlist" in n || "liste" in n
+    }
+
+    private fun ytChannelOn(pkg: String, name: String): Boolean {
+        val key = channelKey(pkg, name)
+        val onSet = prefs.getStringSet("yt_ch_on", emptySet()) ?: emptySet()
+        val offSet = prefs.getStringSet("yt_ch_off", emptySet()) ?: emptySet()
+        if (key in onSet) return true
+        if (key in offSet) return false
+        val legacySaved = prefs.getStringSet("yt_channels", null)
+        if (legacySaved != null && isYoutubeOrSmartTube(pkg) && name != WATCH_NEXT) {
+            return key in legacySaved
+        }
+        return defaultYtChannelOn(pkg, name)
     }
 
     private fun feedForApp(pkg: String): List<Prog> {
         val exact = youtubeFeed.filter { it.pkg == pkg }
-        return if (exact.isNotEmpty()) exact.take(10) else youtubeFeed.take(10)
+        if (exact.isNotEmpty()) return exact.take(10)
+        if (isYoutubeOrSmartTube(pkg)) {
+            return youtubeFeed.filter { isYoutubeOrSmartTube(it.pkg) }.take(10)
+        }
+        return emptyList()
     }
 
     private fun updateYoutubeWidget(list: List<Prog>) {
@@ -6952,70 +6973,117 @@ class MainActivity : Activity() {
     }
 
     private fun queryYoutubeFeed(): List<Prog> {
-        val ytPackages = setOf(
-            "com.google.android.youtube.tv",
-            "com.liskovsoft.smarttubetv",
-            "com.liskovsoft.smarttubetv.beta",
-            "org.smarttube.stable",
-            "org.smarttube.beta"
-        )
-        val channels = appChannels().filter { (_, p, _) ->
-            p in ytPackages || isYoutubeOrSmartTube(p)
-        }
-        if (channels.isEmpty()) return emptyList()
-
         val hidden = prefs.getStringSet("hidden_watch", emptySet()) ?: emptySet()
-        val hasSaved = prefs.getStringSet("yt_channels", null) != null
+        val offSet = prefs.getStringSet("yt_ch_off", emptySet()) ?: emptySet()
+        val legacySaved = prefs.getStringSet("yt_channels", null)
+
+        val watchNextProgs = try {
+            readPrograms(TvContract.WatchNextPrograms.CONTENT_URI, hidden).map { it.second }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val watchNextByPkg = watchNextProgs
+            .filter { !it.pkg.isNullOrEmpty() && !it.image.isNullOrEmpty() }
+            .groupBy { it.pkg!! }
+
+        val channels = appChannels()
         val channelsByPkg = channels.groupBy { it.second }
+        val allPkgs = (watchNextByPkg.keys + channelsByPkg.keys).distinct()
+        if (allPkgs.isEmpty()) return emptyList()
+
         val result = mutableListOf<Prog>()
 
-        for ((pkg, pkgChannels) in channelsByPkg) {
-            val activeChannels = pkgChannels.filter { (_, p, name) ->
-                ytChannelOn(p, name)
-            }.let { filtered ->
-                if (filtered.isEmpty() && !hasSaved) pkgChannels.take(1) else filtered
+        for (pkg in allPkgs) {
+            val appProgs = mutableListOf<Prog>()
+            if (ytChannelOn(pkg, WATCH_NEXT)) {
+                watchNextByPkg[pkg]?.let { appProgs.addAll(it) }
             }
 
-            val progs = activeChannels.flatMap { (id) ->
-                readPrograms(TvContract.buildPreviewProgramsUriForChannel(id), hidden, "yt$id")
-            }.map { pair ->
-                val p = pair.second
-                if (p.pkg == null) Prog(p.title, p.sub, p.progress, p.image, p.intent, pkg, p.group ?: pkg, p.wide) else p
-            }.filter { !it.image.isNullOrEmpty() }
-             .distinctBy { it.intent ?: it.title }
-             .take(12)
+            val pkgChannels = channelsByPkg[pkg].orEmpty()
+            if (pkgChannels.isNotEmpty()) {
+                val activeChannels = pkgChannels.filter { (_, p, name) ->
+                    ytChannelOn(p, name)
+                }.let { filtered ->
+                    val anyExplicitlyOff = pkgChannels.any { channelKey(pkg, it.third) in offSet } ||
+                        (isYoutubeOrSmartTube(pkg) && legacySaved != null)
+                    if (filtered.isEmpty() && appProgs.isEmpty() && !anyExplicitlyOff) {
+                        pkgChannels.take(1)
+                    } else {
+                        filtered
+                    }
+                }
 
-            result.addAll(progs)
+                val chProgs = activeChannels.flatMap { (id) ->
+                    readPrograms(TvContract.buildPreviewProgramsUriForChannel(id), hidden, "yt$id")
+                }.map { pair ->
+                    val p = pair.second
+                    if (p.pkg == null) Prog(p.title, p.sub, p.progress, p.image, p.intent, pkg, p.group ?: pkg, p.wide) else p
+                }.filter { !it.image.isNullOrEmpty() }
+
+                appProgs.addAll(chProgs)
+            }
+
+            result.addAll(
+                appProgs.distinctBy { it.intent ?: it.title }.take(12)
+            )
         }
         return result
     }
 
     private fun pickYtChannels(forPkg: String? = null, fromAppMenu: Boolean = false, focus: Int = 0) {
-        val allYt = appChannels()
-            .filter { (_, p, _) -> isYoutubeOrSmartTube(p) }
-            .distinctBy { (_, p, n) -> channelKey(p, n) }
-        val channels = if (forPkg != null) allYt.filter { it.second == forPkg } else allYt
-        if (channels.isEmpty()) {
+        val allChannels = appChannels().distinctBy { (_, p, n) -> channelKey(p, n) }
+        val watchNextPkgs = youtubeFeed.mapNotNull { it.pkg }.distinct()
+        val entries = mutableListOf<Pair<String, String>>() // (pkg, channelName)
+
+        if (forPkg != null) {
+            if (!isYoutubeOrSmartTube(forPkg) || watchNextPkgs.contains(forPkg)) {
+                entries.add(forPkg to WATCH_NEXT)
+            }
+            allChannels.filter { it.second == forPkg }.forEach { (_, p, n) ->
+                entries.add(p to n)
+            }
+        } else {
+            val candidatePkgs = (watchSources().map { it.pkg } + allChannels.map { it.second } + watchNextPkgs).distinct()
+            for (p in candidatePkgs) {
+                if (!isYoutubeOrSmartTube(p)) {
+                    entries.add(p to WATCH_NEXT)
+                }
+                allChannels.filter { it.second == p }.forEach { (_, _, n) ->
+                    entries.add(p to n)
+                }
+            }
+        }
+
+        if (entries.isEmpty()) {
             if (fromAppMenu && settingsScrim.visibility == View.VISIBLE) closeLauncherSettings()
             toast("Aucun canal trouvé. Ouvrez l'application pour charger les flux.")
             return
         }
+
         val labelMap = apps.associate { it.pkg to it.label }
         fun appName(p: String) = labelMap[p] ?: try {
             packageManager.getApplicationLabel(packageManager.getApplicationInfo(p, 0)).toString()
         } catch (_: PackageManager.NameNotFoundException) { p }
 
         val pageTitle = if (forPkg != null) "${appName(forPkg)} · ${getString(R.string.yt_drawer_feed)}" else getString(R.string.yt_drawer_channels)
-        val rows = channels.mapIndexed { i, (_, p, n) ->
-            val title = if (forPkg != null || n == appName(p)) n else "${appName(p)} · $n"
+        val rows = entries.mapIndexed { i, (p, n) ->
+            val displayCh = if (n == WATCH_NEXT) getString(R.string.continue_watching) else n
+            val title = if (forPkg != null) displayCh else if (displayCh == appName(p)) displayCh else "${appName(p)} · $displayCh"
             val isOn = ytChannelOn(p, n)
             val state = getString(if (isOn) R.string.on else R.string.off)
             page(title, state) {
-                val current = prefs.getStringSet("yt_channels", null)?.toMutableSet()
-                    ?: allYt.filter { ytChannelOn(it.second, it.third) }.map { channelKey(it.second, it.third) }.toMutableSet()
                 val key = channelKey(p, n)
-                if (key in current) current.remove(key) else current.add(key)
-                prefs.edit().putStringSet("yt_channels", current).apply()
+                val nowOn = !ytChannelOn(p, n)
+                val onSet = (prefs.getStringSet("yt_ch_on", emptySet()) ?: emptySet()).toMutableSet()
+                val offSet = (prefs.getStringSet("yt_ch_off", emptySet()) ?: emptySet()).toMutableSet()
+                if (nowOn) {
+                    onSet.add(key)
+                    offSet.remove(key)
+                } else {
+                    offSet.add(key)
+                    onSet.remove(key)
+                }
+                prefs.edit().putStringSet("yt_ch_on", onSet).putStringSet("yt_ch_off", offSet).apply()
                 youtubeFeedKey = null
                 refreshWatchNext()
                 pickYtChannels(forPkg, fromAppMenu, i)
@@ -7139,7 +7207,12 @@ class MainActivity : Activity() {
                 glass.kick(60)
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var cancelled = false
+                override fun onAnimationCancel(animation: android.animation.Animator) {
+                    cancelled = true
+                }
                 override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (cancelled) return
                     drawer.visibility = View.GONE
                     drawer.layoutParams.height = WRAP_CONTENT
                     activeYtRow?.removeAllViews()
@@ -7161,11 +7234,13 @@ class MainActivity : Activity() {
             hideYtDrawerIfNeeded()
             return
         }
-        val onYtApp = isYoutubeOrSmartTube(focus.tag as? String) &&
-            appRows.any { it === focus.parent }
+        val focusedPkg = focus.tag as? String
+        val onActiveApp = focusedPkg != null &&
+            appRows.any { it === focus.parent } &&
+            (focusedPkg == currentYtPkg || pendingYtDrawerShow != null)
         val inDrawer = focus.getTag(R.id.watchScroll) == "yt_drawer" ||
             (activeYtRow != null && (focus.parent as? View)?.parent === activeYtRow)
-        if (!onYtApp && !inDrawer) {
+        if (!onActiveApp && !inDrawer) {
             hideYtDrawerIfNeeded()
         }
     }
@@ -7581,6 +7656,14 @@ class MainActivity : Activity() {
 
         col.addView(frame, LinearLayout.LayoutParams(w, h))
         col.addView(title, LinearLayout.LayoutParams(w, WRAP_CONTENT))
+        if (p.sub.isNotEmpty()) {
+            val subView = label(p.sub, 11f).apply {
+                ink(this, appsInk)
+                alpha = 0.75f
+                setPadding(dp(2), dp(1), dp(2), 0)
+            }
+            col.addView(subView, LinearLayout.LayoutParams(w, WRAP_CONTENT))
+        }
 
         return col
     }
