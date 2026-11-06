@@ -405,9 +405,13 @@ class MainActivity : Activity() {
             { findViewById<ImageView>(R.id.wallpaper).alpha = 0f },
             { findViewById<ImageView>(R.id.wallpaper).alpha = 1f; if (resumed) toast(getString(R.string.video_cannot_play), long = true) })
         for (id in intArrayOf(R.id.appScroll, R.id.watchScroll, R.id.allApps)) findViewById<View>(id)?.setOnScrollChangeListener { _, _, _, _, _ -> glass.kick(150) }
-        findViewById<ScrollView>(R.id.homeVerticalScroll)?.setOnScrollChangeListener { _, _, scrollY, _, _ ->
-            glass.kick(150)
-            updateHomeScrollFade(scrollY)
+        findViewById<ScrollView>(R.id.homeVerticalScroll)?.apply {
+            outlineProvider = ViewOutlineProvider.BOUNDS
+            clipToOutline = true
+            setOnScrollChangeListener { _, _, scrollY, _, _ ->
+                glass.kick(150)
+                updateHomeScrollFade(scrollY)
+            }
         }
         appRow = findViewById(R.id.appRow)
         appRowsContainer = findViewById(R.id.appRowsContainer)
