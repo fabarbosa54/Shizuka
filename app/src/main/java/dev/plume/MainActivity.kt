@@ -722,6 +722,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        hideYtDrawerIfNeeded()
         setClean(false, animate = false)
         videoWallpaper.pause()
         findViewById<ImageView>(R.id.wallpaper).alpha = 1f
@@ -1156,6 +1157,15 @@ class MainActivity : Activity() {
         when {
             settingsScrim.visibility == View.VISIBLE -> pageBack?.invoke() ?: closeLauncherSettings()
             allApps.visibility == View.VISIBLE -> closeAllApps()
+            activeYtRow != null && currentFocus?.parent?.parent === activeYtRow -> {
+                val parentRow = activeYtParentRow
+                val ytTile = (0 until (parentRow?.childCount ?: 0))
+                    .mapNotNull { parentRow?.getChildAt(it) }
+                    .firstOrNull { it.tag == currentYtPkg }
+                    ?: parentRow?.getChildAt(1)
+                    ?: parentRow?.getChildAt(0)
+                ytTile?.requestFocus()
+            }
             topBarExpanded -> collapseTopBar(focusToggle = true)
             !editing && wallPreview == null -> setClean(true) // photo-frame mode: just the wallpaper, the clock and the weather
         }
@@ -4386,6 +4396,10 @@ class MainActivity : Activity() {
         appNameRows.clear()
         appRowLabels.clear()
         categoryTitleViews.clear()
+        activeYtDrawer = null
+        activeYtRow = null
+        activeYtParentRow = null
+        currentYtPkg = null
 
         var firstFocusedView: View? = null
 
@@ -4499,11 +4513,40 @@ class MainActivity : Activity() {
             }
             appNameRows.add(thisNameRow)
 
+            val hasYt = catPkgs.any { isYoutubeOrSmartTube(it) }
+            val ytDrawerScroller = if (hasYt) {
+                SnapScrollView(this, null).apply {
+                    id = View.generateViewId()
+                    visibility = View.GONE
+                    alpha = 0f
+                    clipToPadding = false
+                    isVerticalScrollBarEnabled = false
+                    isHorizontalScrollBarEnabled = false
+                    setPadding(dp(16), dp(8), dp(16), dp(18))
+                    layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                        marginStart = dp(-16)
+                        marginEnd = dp(-16)
+                        topMargin = dp(4)
+                    }
+                }
+            } else null
+            val ytDrawerRow = if (hasYt) {
+                LinearLayout(this).apply {
+                    id = View.generateViewId()
+                    layoutParams = FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
+                    clipChildren = false
+                    orientation = LinearLayout.HORIZONTAL
+                }.also { ytDrawerScroller?.addView(it) }
+            } else null
+
             content.addView(thisRow)
             content.addView(thisLabel)
             content.addView(thisNameRow)
             scroller.addView(content)
             targetContainer.addView(scroller)
+            if (ytDrawerScroller != null) {
+                targetContainer.addView(ytDrawerScroller)
+            }
 
             // Gear button at index 0 of row (Projectivy style)
             val gearW = minOf(tileH, dp(54))
@@ -4527,6 +4570,7 @@ class MainActivity : Activity() {
                 }
                 background = LayerDrawable(arrayOf(ColorDrawable(Color.TRANSPARENT), shape))
                 setOnFocusChangeListener { v, focused ->
+                    if (focused) hideYtDrawerIfNeeded()
                     if (!focused) {
                         visibility = View.GONE
                         shape.setColor(Color.TRANSPARENT)
@@ -4566,25 +4610,22 @@ class MainActivity : Activity() {
                     if (focused) {
                         lastApp = v
                         scrollToView(v)
+                        if (isYoutubeOrSmartTube(a.pkg) && ytDrawerScroller != null && ytDrawerRow != null) {
+                            if (feedForApp(a.pkg).isNotEmpty()) {
+                                showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
+                            } else {
+                                hideYtDrawerIfNeeded()
+                            }
+                        } else {
+                            hideYtDrawerIfNeeded()
+                        }
+                    } else {
+                        ui.post { checkYtDrawerFocus() }
                     }
                     showRowLabel(v, focused)
                 }
                 if (focusedTag != null && t.tag == focusedTag) firstFocusedView = t
                 if (firstFocusedView == null && isFirstOverall && i == 0) firstFocusedView = t
-            }
-
-            val isYtRow = cat.name.contains("youtube", ignoreCase = true) ||
-                catPkgs.any { it.contains("youtube", ignoreCase = true) || it.contains("smarttube", ignoreCase = true) }
-            if (isYtRow && youtubeFeed.isNotEmpty()) {
-                youtubeFeed.forEachIndexed { ytIdx, prog ->
-                    val card = inlineVideoCard(prog, tileH)
-                    val cardW = tileH * 16 / 9
-                    val lp = LinearLayout.LayoutParams(cardW, tileH).apply {
-                        marginEnd = gap
-                        if (ytIdx == 0) marginStart = dp(12)
-                    }
-                    thisRow.addView(card, lp)
-                }
             }
         }
 
@@ -5164,7 +5205,15 @@ class MainActivity : Activity() {
                         }
                     }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (rowIdxInGroup < currentList.size - 1) {
+                        if (activeYtDrawer?.visibility == View.VISIBLE &&
+                            currentRow === activeYtParentRow && isYoutubeOrSmartTube(v.tag as? String) &&
+                            activeYtRow != null && activeYtRow!!.childCount > 0
+                        ) {
+                            val firstCol = activeYtRow!!.getChildAt(0) as? ViewGroup
+                            val target = firstCol?.getChildAt(0) ?: firstCol ?: v
+                            scrollToView(target)
+                            target
+                        } else if (rowIdxInGroup < currentList.size - 1) {
                             val nextRow = currentList[rowIdxInGroup + 1]
                             val targetChildIdx = if (childIdx == 0) 1 else childIdx.coerceIn(1, (nextRow.childCount - 1).coerceAtLeast(0))
                             val target = nextRow.getChildAt(targetChildIdx) ?: v
@@ -5206,6 +5255,77 @@ class MainActivity : Activity() {
                         } else if (childIdx == currentRow.childCount - 1) {
                             v
                         } else null
+                    }
+                    else -> null
+                }
+            }
+            activeYtRow != null && v.parent?.parent === activeYtRow -> {
+                val col = v.parent as? ViewGroup
+                val drawer = activeYtRow!!
+                val i = if (col != null) drawer.indexOfChild(col) else 0
+                when (key) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        val parentRow = activeYtParentRow
+                        val ytTile = (0 until (parentRow?.childCount ?: 0))
+                            .mapNotNull { parentRow?.getChildAt(it) }
+                            .firstOrNull { it.tag == currentYtPkg }
+                            ?: parentRow?.getChildAt(1)
+                            ?: parentRow?.getChildAt(0)
+                            ?: top
+                        scrollToView(ytTile)
+                        ytTile
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        val parentRow = activeYtParentRow
+                        val isBelow = parentRow != null && appRowsBelow.contains(parentRow)
+                        val currentList = if (isBelow) appRowsBelow else appRowsAbove
+                        val rowIdxInGroup = if (parentRow != null) currentList.indexOf(parentRow) else -1
+                        val parentTile = (0 until (parentRow?.childCount ?: 0))
+                            .mapNotNull { parentRow?.getChildAt(it) }
+                            .firstOrNull { it.tag == currentYtPkg }
+                        val colIdx = if (parentRow != null && parentTile != null) parentRow.indexOfChild(parentTile) else 1
+                        if (rowIdxInGroup in 0 until currentList.size - 1) {
+                            val nextRow = currentList[rowIdxInGroup + 1]
+                            val targetChildIdx = if (colIdx <= 0) 1 else colIdx.coerceIn(1, (nextRow.childCount - 1).coerceAtLeast(0))
+                            val target = nextRow.getChildAt(targetChildIdx) ?: v
+                            scrollToView(target)
+                            target
+                        } else if (!isBelow) {
+                            if (cards != null) {
+                                scrollToView(cards)
+                                cards
+                            } else if (appRowsBelow.isNotEmpty()) {
+                                val nextRow = appRowsBelow.first()
+                                val targetChildIdx = if (colIdx <= 0) 1 else colIdx.coerceIn(1, (nextRow.childCount - 1).coerceAtLeast(0))
+                                val target = nextRow.getChildAt(targetChildIdx) ?: v
+                                scrollToView(target)
+                                target
+                            } else {
+                                v
+                            }
+                        } else {
+                            v
+                        }
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        if (i <= 0) {
+                            v
+                        } else {
+                            val prevCol = drawer.getChildAt(i - 1) as? ViewGroup
+                            val target = prevCol?.getChildAt(0) ?: prevCol ?: v
+                            scrollToView(target)
+                            target
+                        }
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (i >= drawer.childCount - 1) {
+                            v
+                        } else {
+                            val nextCol = drawer.getChildAt(i + 1) as? ViewGroup
+                            val target = nextCol?.getChildAt(0) ?: nextCol ?: v
+                            scrollToView(target)
+                            target
+                        }
                     }
                     else -> null
                 }
@@ -6795,12 +6915,28 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun isYoutubeOrSmartTube(pkg: String?): Boolean {
+        if (pkg == null) return false
+        return pkg.contains("youtube", ignoreCase = true) || pkg.contains("smarttube", ignoreCase = true)
+    }
+
+    private fun feedForApp(pkg: String): List<Prog> {
+        val exact = youtubeFeed.filter { it.pkg == pkg }
+        return if (exact.isNotEmpty()) exact.take(10) else youtubeFeed.take(10)
+    }
+
     private fun updateYoutubeWidget(list: List<Prog>) {
         val key = list.joinToString("|") { "${it.title}/${it.progress}/${it.image}" }
         if (key != youtubeFeedKey) {
             youtubeFeedKey = key
             youtubeFeed = list
-            renderApps()
+            val currentPkg = currentYtPkg
+            val drawerScroller = activeYtDrawer
+            val drawerRow = activeYtRow
+            val parentRow = activeYtParentRow
+            if (currentPkg != null && drawerScroller != null && drawerRow != null && parentRow != null && drawerScroller.visibility == View.VISIBLE) {
+                showYtDrawer(currentPkg, drawerScroller, drawerRow, parentRow)
+            }
         }
     }
 
@@ -6813,23 +6949,92 @@ class MainActivity : Activity() {
             "org.smarttube.beta"
         )
         val channels = appChannels().filter { (_, p, _) ->
-            p in ytPackages || p.contains("youtube", ignoreCase = true) || p.contains("smarttube", ignoreCase = true)
+            p in ytPackages || isYoutubeOrSmartTube(p)
         }
         if (channels.isEmpty()) return emptyList()
 
-        val priorityChannels = channels.filter { (_, _, name) ->
-            val n = name.lowercase()
-            n.contains("subscription") || n.contains("abonnement") || n.contains("recommended") || n.contains("recommandation")
-        }.ifEmpty { channels }
-
         val hidden = prefs.getStringSet("hidden_watch", emptySet()) ?: emptySet()
-        val progs = priorityChannels.flatMap { (id) ->
-            readPrograms(TvContract.buildPreviewProgramsUriForChannel(id), hidden, "yt$id")
-        }.map { it.second }
+        val channelsByPkg = channels.groupBy { it.second }
+        val result = mutableListOf<Prog>()
 
-        return progs.filter { !it.image.isNullOrEmpty() }
-            .distinctBy { it.intent ?: it.title }
-            .take(10)
+        for ((pkg, pkgChannels) in channelsByPkg) {
+            val priorityChannels = pkgChannels.filter { (_, _, name) ->
+                val n = name.lowercase()
+                n.contains("subscription") || n.contains("abonnement") || n.contains("recommended") || n.contains("recommandation")
+            }.ifEmpty { pkgChannels }
+
+            val progs = priorityChannels.flatMap { (id) ->
+                readPrograms(TvContract.buildPreviewProgramsUriForChannel(id), hidden, "yt$id")
+            }.map { pair ->
+                val p = pair.second
+                if (p.pkg == null) Prog(p.title, p.sub, p.progress, p.image, p.intent, pkg, p.group ?: pkg, p.wide) else p
+            }.filter { !it.image.isNullOrEmpty() }
+             .distinctBy { it.intent ?: it.title }
+             .take(12)
+
+            result.addAll(progs)
+        }
+        return result
+    }
+
+    private fun showYtDrawer(pkg: String, drawerScroller: View, drawerRow: LinearLayout, parentAppRow: LinearLayout) {
+        val items = feedForApp(pkg)
+        if (items.isEmpty()) {
+            hideYtDrawerIfNeeded()
+            return
+        }
+
+        if (currentYtPkg != pkg || drawerRow.childCount == 0) {
+            drawerRow.removeAllViews()
+            items.forEach { prog ->
+                drawerRow.addView(ytPreviewCard(prog))
+            }
+        }
+
+        activeYtDrawer = drawerScroller
+        activeYtRow = drawerRow
+        activeYtParentRow = parentAppRow
+        currentYtPkg = pkg
+
+        drawerScroller.animate().cancel()
+        if (drawerScroller.visibility != View.VISIBLE) {
+            drawerScroller.visibility = View.VISIBLE
+            drawerScroller.alpha = 0f
+            drawerScroller.animate().alpha(1f).setDuration(220).start()
+        } else {
+            drawerScroller.alpha = 1f
+        }
+    }
+
+    private fun hideYtDrawerIfNeeded() {
+        val drawer = activeYtDrawer ?: return
+        if (drawer.visibility == View.GONE) return
+        drawer.animate().cancel()
+        drawer.animate().alpha(0f).setDuration(150).withEndAction {
+            drawer.visibility = View.GONE
+            activeYtRow?.removeAllViews()
+            if (activeYtDrawer === drawer) {
+                activeYtDrawer = null
+                activeYtRow = null
+                activeYtParentRow = null
+                currentYtPkg = null
+            }
+        }.start()
+    }
+
+    private fun checkYtDrawerFocus() {
+        val focus = currentFocus ?: run {
+            hideYtDrawerIfNeeded()
+            return
+        }
+        val onYtApp = activeYtParentRow != null &&
+            focus.parent === activeYtParentRow &&
+            isYoutubeOrSmartTube(focus.tag as? String)
+        val inDrawer = activeYtRow != null &&
+            focus.parent?.parent === activeYtRow
+        if (!onYtApp && !inDrawer) {
+            hideYtDrawerIfNeeded()
+        }
     }
 
     /**
@@ -7047,6 +7252,10 @@ class MainActivity : Activity() {
     private var watchList = emptyList<Prog>()
     private var youtubeFeed = emptyList<Prog>()
     private var youtubeFeedKey: String? = null
+    private var activeYtDrawer: View? = null
+    private var activeYtRow: LinearLayout? = null
+    private var activeYtParentRow: LinearLayout? = null
+    private var currentYtPkg: String? = null
 
     /** "always", "down" (hidden until Down reaches it) or "never". */
     private fun rowShow() = prefs.getString("row_show", "always")!!.takeIf { it in ROW_SHOW } ?: "always"
@@ -7172,12 +7381,28 @@ class MainActivity : Activity() {
         return col
     }
 
-    private fun inlineVideoCard(p: Prog, tileH: Int): View {
-        val w = tileH * 16 / 9
+    private fun ytPreviewCard(p: Prog): View {
+        val w = dp(196)
+        val h = dp(110)
+        val gap = dp(GRID_GAP)
+
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            layoutParams = LinearLayout.LayoutParams(w, WRAP_CONTENT).apply {
+                marginEnd = gap
+            }
+        }
+
         val frame = FrameLayout(this).apply {
             id = View.generateViewId()
             clipChildren = true
             clipToOutline = true
+            isFocusable = true
+            isClickable = true
+            tag = p.intent ?: p.title
+            contentDescription = p.title
+            setTag(R.id.watchRow, p)
         }
 
         val img = ImageView(this).apply {
@@ -7185,34 +7410,6 @@ class MainActivity : Activity() {
             setBackgroundColor(if (dark) DARK_SURFACE else 0xFFDDE1E5.toInt())
         }
         frame.addView(img, MATCH_PARENT, MATCH_PARENT)
-
-        val scrim = View(this).apply {
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(Color.TRANSPARENT, 0xCC000000.toInt())
-            )
-        }
-        frame.addView(scrim, FrameLayout.LayoutParams(MATCH_PARENT, tileH * 3 / 5, Gravity.BOTTOM))
-
-        val icon = sourceIcon(p.pkg)
-        if (icon != null) {
-            val badge = ImageView(this).apply {
-                setImageDrawable(icon)
-                scaleType = ImageView.ScaleType.FIT_CENTER
-            }
-            frame.addView(badge, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.TOP or Gravity.START).apply {
-                setMargins(dp(6), dp(6), 0, 0)
-            })
-        }
-
-        val title = label(p.title, 11f).apply {
-            setTextColor(Color.WHITE)
-            isSingleLine = true
-            ellipsize = TextUtils.TruncateAt.MARQUEE
-            marqueeRepeatLimit = -1
-            setPadding(dp(8), 0, dp(8), dp(6))
-        }
-        frame.addView(title, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
 
         if (p.progress > 0) {
             val pb = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -7223,20 +7420,33 @@ class MainActivity : Activity() {
             frame.addView(pb, FrameLayout.LayoutParams(MATCH_PARENT, dp(3), Gravity.BOTTOM))
         }
 
+        val title = TextView(this).apply {
+            text = p.title
+            textSize = 12f
+            maxLines = 1
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.MARQUEE
+            marqueeRepeatLimit = -1
+            setPadding(dp(2), dp(6), dp(2), 0)
+            ink(this, appsInk)
+        }
+
         style(frame, tileRadius(), card = true, lift = 1.08f, frost = false) { focused ->
             title.isSelected = focused
             if (focused) {
                 lastApp = frame
                 scrollToView(frame)
             }
-            showRowLabel(frame, false)
+            checkYtDrawerFocus()
         }
 
-        frame.contentDescription = p.title
         frame.setOnClickListener { open(p) }
-        frame.setTag(R.id.watchRow, p)
         loadPoster(img, p.image)
-        return frame
+
+        col.addView(frame, LinearLayout.LayoutParams(w, h))
+        col.addView(title, LinearLayout.LayoutParams(w, WRAP_CONTENT))
+
+        return col
     }
 
     /** [ink] fills it; the track is a faint version on the same side, light behind white and dark behind near-black. */
