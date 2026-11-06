@@ -6928,7 +6928,14 @@ class MainActivity : Activity() {
         if (name == WATCH_NEXT) return !isYoutubeOrSmartTube(pkg)
         val n = name.lowercase()
         if (isYoutubeOrSmartTube(pkg)) {
-            return "recommend" in n || "recommand" in n || "accueil" in n || "home" in n || "subscri" in n || "abonn" in n
+            val matchesKeyword = "recommend" in n || "recommand" in n || "accueil" in n || "home" in n || "subscri" in n || "abonn" in n
+            if (matchesKeyword) return true
+            val pkgChs = appChannels().filter { it.second == pkg }
+            val anyMatches = pkgChs.any { (_, _, chName) ->
+                val cn = chName.lowercase()
+                "recommend" in cn || "recommand" in cn || "accueil" in cn || "home" in cn || "subscri" in cn || "abonn" in cn
+            }
+            return !anyMatches && pkgChs.firstOrNull()?.third == name
         }
         return "continue" in n || "reprendre" in n || "lecture" in n || "on deck" in n || "en cours" in n ||
             "next" in n || "suivre" in n || "watchlist" in n || "liste" in n
@@ -7003,14 +7010,6 @@ class MainActivity : Activity() {
             if (pkgChannels.isNotEmpty()) {
                 val activeChannels = pkgChannels.filter { (_, p, name) ->
                     ytChannelOn(p, name)
-                }.let { filtered ->
-                    val anyExplicitlyOff = pkgChannels.any { channelKey(pkg, it.third) in offSet } ||
-                        (isYoutubeOrSmartTube(pkg) && legacySaved != null)
-                    if (filtered.isEmpty() && appProgs.isEmpty() && !anyExplicitlyOff) {
-                        pkgChannels.take(1)
-                    } else {
-                        filtered
-                    }
                 }
 
                 val chProgs = activeChannels.flatMap { (id) ->
@@ -7031,25 +7030,35 @@ class MainActivity : Activity() {
     }
 
     private fun pickYtChannels(forPkg: String? = null, fromAppMenu: Boolean = false, focus: Int = 0) {
+        val hidden = prefs.getStringSet("hidden_watch", emptySet()) ?: emptySet()
         val allChannels = appChannels().distinctBy { (_, p, n) -> channelKey(p, n) }
-        val watchNextPkgs = youtubeFeed.mapNotNull { it.pkg }.distinct()
-        val entries = mutableListOf<Pair<String, String>>() // (pkg, channelName)
+        val watchNextCounts = try {
+            readPrograms(TvContract.WatchNextPrograms.CONTENT_URI, hidden)
+                .map { it.second }
+                .filter { !it.pkg.isNullOrEmpty() && !it.image.isNullOrEmpty() }
+                .groupingBy { it.pkg!! }
+                .eachCount()
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        val watchNextPkgs = watchNextCounts.keys
+        val entries = mutableListOf<Triple<Long, String, String>>() // (channelId or -1L for WATCH_NEXT, pkg, channelName)
 
         if (forPkg != null) {
             if (!isYoutubeOrSmartTube(forPkg) || watchNextPkgs.contains(forPkg)) {
-                entries.add(forPkg to WATCH_NEXT)
+                entries.add(Triple(-1L, forPkg, WATCH_NEXT))
             }
-            allChannels.filter { it.second == forPkg }.forEach { (_, p, n) ->
-                entries.add(p to n)
+            allChannels.filter { it.second == forPkg }.forEach { (id, p, n) ->
+                entries.add(Triple(id, p, n))
             }
         } else {
             val candidatePkgs = (watchSources().map { it.pkg } + allChannels.map { it.second } + watchNextPkgs).distinct()
             for (p in candidatePkgs) {
                 if (!isYoutubeOrSmartTube(p)) {
-                    entries.add(p to WATCH_NEXT)
+                    entries.add(Triple(-1L, p, WATCH_NEXT))
                 }
-                allChannels.filter { it.second == p }.forEach { (_, _, n) ->
-                    entries.add(p to n)
+                allChannels.filter { it.second == p }.forEach { (id, _, n) ->
+                    entries.add(Triple(id, p, n))
                 }
             }
         }
@@ -7066,11 +7075,24 @@ class MainActivity : Activity() {
         } catch (_: PackageManager.NameNotFoundException) { p }
 
         val pageTitle = if (forPkg != null) "${appName(forPkg)} · ${getString(R.string.yt_drawer_feed)}" else getString(R.string.yt_drawer_channels)
-        val rows = entries.mapIndexed { i, (p, n) ->
-            val displayCh = if (n == WATCH_NEXT) getString(R.string.continue_watching) else n
-            val title = if (forPkg != null) displayCh else if (displayCh == appName(p)) displayCh else "${appName(p)} · $displayCh"
+        val rows = entries.mapIndexed { i, (id, p, n) ->
+            val appLabel = appName(p)
+            val displayCh = when {
+                n == WATCH_NEXT -> getString(R.string.continue_watching)
+                n.equals(appLabel, ignoreCase = true) -> "Catalogue / Recommandations"
+                else -> n
+            }
+            val title = if (forPkg != null) displayCh else "$appLabel · $displayCh"
+            val count = if (n == WATCH_NEXT) {
+                watchNextCounts[p] ?: 0
+            } else {
+                try {
+                    readPrograms(TvContract.buildPreviewProgramsUriForChannel(id), hidden, "yt$id")
+                        .count { !it.second.image.isNullOrEmpty() }
+                } catch (_: Exception) { 0 }
+            }
             val isOn = ytChannelOn(p, n)
-            val state = getString(if (isOn) R.string.on else R.string.off)
+            val state = "${getString(if (isOn) R.string.on else R.string.off)} ($count)"
             page(title, state) {
                 val key = channelKey(p, n)
                 val nowOn = !ytChannelOn(p, n)
