@@ -4400,6 +4400,8 @@ class MainActivity : Activity() {
         activeYtRow = null
         activeYtParentRow = null
         currentYtPkg = null
+        ytDrawerAnim?.cancel()
+        ytDrawerAnim = null
 
         var firstFocusedView: View? = null
 
@@ -5207,10 +5209,9 @@ class MainActivity : Activity() {
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (activeYtDrawer?.visibility == View.VISIBLE &&
                             currentRow === activeYtParentRow && isYoutubeOrSmartTube(v.tag as? String) &&
-                            activeYtRow != null && activeYtRow!!.childCount > 0
+                            (activeYtRow?.childCount ?: 0) > 0
                         ) {
-                            val firstCol = activeYtRow!!.getChildAt(0) as? ViewGroup
-                            val target = firstCol?.getChildAt(0) ?: firstCol ?: v
+                            val target = (activeYtRow!!.getChildAt(0) as? ViewGroup)?.getChildAt(0) ?: v
                             scrollToView(target)
                             target
                         } else if (rowIdxInGroup < currentList.size - 1) {
@@ -5259,73 +5260,43 @@ class MainActivity : Activity() {
                     else -> null
                 }
             }
-            activeYtRow != null && v.parent?.parent === activeYtRow -> {
-                val col = v.parent as? ViewGroup
-                val drawer = activeYtRow!!
-                val i = if (col != null) drawer.indexOfChild(col) else 0
+            (v.parent as? View)?.parent === activeYtRow -> {
+                val col = v.parent as View
+                val row = activeYtRow!!
+                val i = row.indexOfChild(col)
                 when (key) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        if (i > 0) (row.getChildAt(i - 1) as? ViewGroup)?.getChildAt(0) else v
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (i < row.childCount - 1) (row.getChildAt(i + 1) as? ViewGroup)?.getChildAt(0) else v
+                    }
                     KeyEvent.KEYCODE_DPAD_UP -> {
-                        val parentRow = activeYtParentRow
-                        val ytTile = (0 until (parentRow?.childCount ?: 0))
-                            .mapNotNull { parentRow?.getChildAt(it) }
+                        val target = (0 until (activeYtParentRow?.childCount ?: 0))
+                            .mapNotNull { activeYtParentRow?.getChildAt(it) }
                             .firstOrNull { it.tag == currentYtPkg }
-                            ?: parentRow?.getChildAt(1)
-                            ?: parentRow?.getChildAt(0)
-                            ?: top
-                        scrollToView(ytTile)
-                        ytTile
+                            ?: activeYtParentRow?.getChildAt(1)
+                            ?: activeYtParentRow?.getChildAt(0)
+                        target?.also { scrollToView(it) }
                     }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
                         val parentRow = activeYtParentRow
                         val isBelow = parentRow != null && appRowsBelow.contains(parentRow)
                         val currentList = if (isBelow) appRowsBelow else appRowsAbove
                         val rowIdxInGroup = if (parentRow != null) currentList.indexOf(parentRow) else -1
-                        val parentTile = (0 until (parentRow?.childCount ?: 0))
-                            .mapNotNull { parentRow?.getChildAt(it) }
-                            .firstOrNull { it.tag == currentYtPkg }
-                        val colIdx = if (parentRow != null && parentTile != null) parentRow.indexOfChild(parentTile) else 1
-                        if (rowIdxInGroup in 0 until currentList.size - 1) {
-                            val nextRow = currentList[rowIdxInGroup + 1]
-                            val targetChildIdx = if (colIdx <= 0) 1 else colIdx.coerceIn(1, (nextRow.childCount - 1).coerceAtLeast(0))
-                            val target = nextRow.getChildAt(targetChildIdx) ?: v
-                            scrollToView(target)
-                            target
-                        } else if (!isBelow) {
-                            if (cards != null) {
-                                scrollToView(cards)
-                                cards
-                            } else if (appRowsBelow.isNotEmpty()) {
-                                val nextRow = appRowsBelow.first()
-                                val targetChildIdx = if (colIdx <= 0) 1 else colIdx.coerceIn(1, (nextRow.childCount - 1).coerceAtLeast(0))
-                                val target = nextRow.getChildAt(targetChildIdx) ?: v
-                                scrollToView(target)
-                                target
-                            } else {
-                                v
+                        val nextTarget = when {
+                            rowIdxInGroup >= 0 && rowIdxInGroup < currentList.size - 1 -> {
+                                val nextRow = currentList[rowIdxInGroup + 1]
+                                nextRow.getChildAt(1) ?: nextRow.getChildAt(0)
                             }
-                        } else {
-                            v
+                            !isBelow && cards != null -> cards
+                            !isBelow && appRowsBelow.isNotEmpty() -> {
+                                val nextRow = appRowsBelow.first()
+                                nextRow.getChildAt(1) ?: nextRow.getChildAt(0)
+                            }
+                            else -> v
                         }
-                    }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        if (i <= 0) {
-                            v
-                        } else {
-                            val prevCol = drawer.getChildAt(i - 1) as? ViewGroup
-                            val target = prevCol?.getChildAt(0) ?: prevCol ?: v
-                            scrollToView(target)
-                            target
-                        }
-                    }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (i >= drawer.childCount - 1) {
-                            v
-                        } else {
-                            val nextCol = drawer.getChildAt(i + 1) as? ViewGroup
-                            val target = nextCol?.getChildAt(0) ?: nextCol ?: v
-                            scrollToView(target)
-                            target
-                        }
+                        nextTarget?.also { if (it !== v) scrollToView(it) }
                     }
                     else -> null
                 }
@@ -6984,7 +6955,10 @@ class MainActivity : Activity() {
             return
         }
 
-        if (currentYtPkg != pkg || drawerRow.childCount == 0) {
+        val wasVisible = drawerScroller.visibility == View.VISIBLE
+        val isNewPkg = currentYtPkg != pkg
+
+        if (isNewPkg || drawerRow.childCount == 0) {
             drawerRow.removeAllViews()
             items.forEach { prog ->
                 drawerRow.addView(ytPreviewCard(prog))
@@ -6996,30 +6970,108 @@ class MainActivity : Activity() {
         activeYtParentRow = parentAppRow
         currentYtPkg = pkg
 
-        drawerScroller.animate().cancel()
-        if (drawerScroller.visibility != View.VISIBLE) {
-            drawerScroller.visibility = View.VISIBLE
-            drawerScroller.alpha = 0f
-            drawerScroller.animate().alpha(1f).setDuration(220).start()
+        if (wasVisible) {
+            if (isNewPkg) {
+                for (idx in 0 until drawerRow.childCount) {
+                    val cardCol = drawerRow.getChildAt(idx)
+                    cardCol.alpha = 0f
+                    cardCol.translationY = dp(12).toFloat()
+                    cardCol.animate()
+                        .alpha(1f)
+                        .translationY(0f)
+                        .setStartDelay((idx * 25L).coerceAtMost(150L))
+                        .setDuration(200)
+                        .setInterpolator(DECELERATE)
+                        .start()
+                }
+            }
         } else {
-            drawerScroller.alpha = 1f
+            ytDrawerAnim?.cancel()
+            drawerScroller.visibility = View.VISIBLE
+            drawerScroller.measure(
+                View.MeasureSpec.makeMeasureSpec(resources.displayMetrics.widthPixels, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            )
+            val targetH = drawerScroller.measuredHeight.coerceAtLeast(dp(156))
+            drawerScroller.layoutParams.height = 0
+            drawerScroller.alpha = 0f
+            drawerScroller.requestLayout()
+
+            // Cascade sur les cartes
+            for (idx in 0 until drawerRow.childCount) {
+                val cardCol = drawerRow.getChildAt(idx)
+                cardCol.alpha = 0f
+                cardCol.translationY = dp(14).toFloat()
+                cardCol.animate()
+                    .alpha(1f)
+                    .translationY(0f)
+                    .setStartDelay(40L + (idx * 25L).coerceAtMost(150L))
+                    .setDuration(220)
+                    .setInterpolator(DECELERATE)
+                    .start()
+            }
+
+            ytDrawerAnim = ValueAnimator.ofInt(0, targetH).apply {
+                duration = 240
+                interpolator = DECELERATE
+                addUpdateListener { anim ->
+                    val h = anim.animatedValue as Int
+                    drawerScroller.layoutParams.height = h
+                    drawerScroller.alpha = anim.animatedFraction
+                    drawerScroller.requestLayout()
+                    glass.kick(60)
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        drawerScroller.layoutParams.height = WRAP_CONTENT
+                        drawerScroller.alpha = 1f
+                        drawerScroller.requestLayout()
+                    }
+                })
+                start()
+            }
         }
     }
 
     private fun hideYtDrawerIfNeeded() {
         val drawer = activeYtDrawer ?: return
         if (drawer.visibility == View.GONE) return
-        drawer.animate().cancel()
-        drawer.animate().alpha(0f).setDuration(150).withEndAction {
+        ytDrawerAnim?.cancel()
+        val startH = drawer.height
+        if (startH <= 0) {
             drawer.visibility = View.GONE
+            drawer.layoutParams.height = WRAP_CONTENT
             activeYtRow?.removeAllViews()
-            if (activeYtDrawer === drawer) {
-                activeYtDrawer = null
-                activeYtRow = null
-                activeYtParentRow = null
-                currentYtPkg = null
+            activeYtDrawer = null
+            activeYtRow = null
+            activeYtParentRow = null
+            currentYtPkg = null
+            return
+        }
+        ytDrawerAnim = ValueAnimator.ofInt(startH, 0).apply {
+            duration = 180
+            interpolator = DECELERATE
+            addUpdateListener { anim ->
+                drawer.layoutParams.height = anim.animatedValue as Int
+                drawer.alpha = 1f - anim.animatedFraction
+                drawer.requestLayout()
+                glass.kick(60)
             }
-        }.start()
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    drawer.visibility = View.GONE
+                    drawer.layoutParams.height = WRAP_CONTENT
+                    activeYtRow?.removeAllViews()
+                    if (activeYtDrawer === drawer) {
+                        activeYtDrawer = null
+                        activeYtRow = null
+                        activeYtParentRow = null
+                        currentYtPkg = null
+                    }
+                }
+            })
+            start()
+        }
     }
 
     private fun checkYtDrawerFocus() {
@@ -7031,7 +7083,7 @@ class MainActivity : Activity() {
             focus.parent === activeYtParentRow &&
             isYoutubeOrSmartTube(focus.tag as? String)
         val inDrawer = activeYtRow != null &&
-            focus.parent?.parent === activeYtRow
+            (focus.parent as? View)?.parent === activeYtRow
         if (!onYtApp && !inDrawer) {
             hideYtDrawerIfNeeded()
         }
@@ -7256,6 +7308,7 @@ class MainActivity : Activity() {
     private var activeYtRow: LinearLayout? = null
     private var activeYtParentRow: LinearLayout? = null
     private var currentYtPkg: String? = null
+    private var ytDrawerAnim: ValueAnimator? = null
 
     /** "always", "down" (hidden until Down reaches it) or "never". */
     private fun rowShow() = prefs.getString("row_show", "always")!!.takeIf { it in ROW_SHOW } ?: "always"
