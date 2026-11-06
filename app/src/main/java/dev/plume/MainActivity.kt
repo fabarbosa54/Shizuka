@@ -313,10 +313,11 @@ class MainActivity : Activity() {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     // Posters get their own threads: one slow image server must not hold up the rest (or the row data).
-    private val posterIo = Executors.newFixedThreadPool(3)
+    private val posterIo = Executors.newFixedThreadPool(6)
     private val loading = java.util.Collections.synchronizedSet(HashSet<String>())
+    private val posterCallbacks = java.util.concurrent.ConcurrentHashMap<String, MutableList<ImageView>>()
     private val ui = Handler(Looper.getMainLooper())
-    private val posters = object : LruCache<String, Bitmap>(6 * 1024 * 1024) {
+    private val posters = object : LruCache<String, Bitmap>(16 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
 
@@ -4938,8 +4939,9 @@ class MainActivity : Activity() {
 
         appScrollers.forEach { scroller ->
             val parentTop = (scroller.parent as? View)?.top ?: 0
-            val topInViewport = (parentTop + scroller.top) - scrollY
-            val fade = ((topInViewport + dp(35)).toFloat() / dp(65)).coerceIn(0f, 1f)
+            // scroller has a -16dp / -24dp topMargin and 24dp topPadding; visible tile top starts at +20dp
+            val topInViewport = (parentTop + scroller.top + dp(20)) - scrollY
+            val fade = (topInViewport.toFloat() / dp(36)).coerceIn(0f, 1f)
             scroller.alpha = fade
         }
         if (CategoryManager.showTitles(prefs)) {
@@ -4949,16 +4951,16 @@ class MainActivity : Activity() {
                 val topInViewport = (parentTop + titleView.top) - scrollY
                 val isFocused = focusedRow != null && focusedRow === appRows.getOrNull(i)
                 val baseAlpha = if (isFocused) 1f else 0.72f
-                val titleFade = ((topInViewport + dp(15)).toFloat() / dp(40)).coerceIn(0f, 1f)
+                val titleFade = ((topInViewport - dp(4)).toFloat() / dp(28)).coerceIn(0f, 1f)
                 titleView.alpha = baseAlpha * titleFade
             }
         }
         if (watchScroll.visibility == View.VISIBLE) {
-            val watchTopInViewport = watchScroll.top - scrollY
-            val watchFade = ((watchTopInViewport + dp(35)).toFloat() / dp(65)).coerceIn(0f, 1f)
+            val watchTopInViewport = (watchScroll.top + dp(20)) - scrollY
+            val watchFade = (watchTopInViewport.toFloat() / dp(36)).coerceIn(0f, 1f)
             watchScroll.alpha = watchFade
             val watchTitleTopInViewport = watchTitle.top - scrollY
-            val titleFade = ((watchTitleTopInViewport + dp(15)).toFloat() / dp(40)).coerceIn(0f, 1f)
+            val titleFade = ((watchTitleTopInViewport - dp(4)).toFloat() / dp(28)).coerceIn(0f, 1f)
             watchTitle.alpha = titleAlpha * titleFade
         }
     }
@@ -4977,7 +4979,7 @@ class MainActivity : Activity() {
                 categoryTitleViews.forEachIndexed { i, titleView ->
                     val parentTop = (titleView.parent as? View)?.top ?: 0
                     val topInViewport = (parentTop + titleView.top) - scrollY
-                    val scrollFade = ((topInViewport + dp(15)).toFloat() / dp(40)).coerceIn(0f, 1f)
+                    val scrollFade = if (scrollY <= 0) 1f else ((topInViewport - dp(4)).toFloat() / dp(28)).coerceIn(0f, 1f)
                     val targetAlpha = (if (i == rowIdx) 1f else 0.72f) * scrollFade
                     if (titleView.alpha != targetAlpha) {
                         titleView.animate().alpha(targetAlpha).setDuration(160).start()
@@ -4990,7 +4992,7 @@ class MainActivity : Activity() {
                         categoryTitleViews.forEach { titleView ->
                             val parentTop = (titleView.parent as? View)?.top ?: 0
                             val topInViewport = (parentTop + titleView.top) - scrollY
-                            val scrollFade = ((topInViewport + dp(15)).toFloat() / dp(40)).coerceIn(0f, 1f)
+                            val scrollFade = if (scrollY <= 0) 1f else ((topInViewport - dp(4)).toFloat() / dp(28)).coerceIn(0f, 1f)
                             val targetAlpha = 0.72f * scrollFade
                             if (titleView.alpha != targetAlpha) {
                                 titleView.animate().alpha(targetAlpha).setDuration(160).start()
@@ -7103,6 +7105,8 @@ class MainActivity : Activity() {
                 drawerRow.removeAllViews()
                 showYtDrawer(currentPkg, drawerScroller, drawerRow, parentRow)
             }
+        } else {
+            retryPosters()
         }
     }
 
@@ -8127,7 +8131,11 @@ class MainActivity : Activity() {
         if (uri == null) return
         posters.get(uri)?.let { v.setImageBitmap(it); return }
         v.tag = uri
-        if (!loading.add(uri)) return // already on its way
+        synchronized(posterCallbacks) {
+            val list = posterCallbacks.getOrPut(uri) { mutableListOf() }
+            if (!list.contains(v)) list.add(v)
+        }
+        if (!loading.add(uri)) return // already on its way; callback registered above
         posterIo.execute {
             val bmp = try {
                 decode(uri)
@@ -8136,9 +8144,23 @@ class MainActivity : Activity() {
                 null
             } finally {
                 loading.remove(uri)
-            } ?: return@execute
+            }
+            if (bmp == null) {
+                synchronized(posterCallbacks) { posterCallbacks.remove(uri) }
+                return@execute
+            }
             posters.put(uri, bmp)
-            ui.post { if (!isDestroyed && v.tag == uri) v.setImageBitmap(bmp) }
+            val targets = synchronized(posterCallbacks) {
+                posterCallbacks.remove(uri)?.toList() ?: emptyList()
+            }
+            ui.post {
+                if (!isDestroyed) {
+                    if (v.tag == uri) v.setImageBitmap(bmp)
+                    for (target in targets) {
+                        if (target.tag == uri) target.setImageBitmap(bmp)
+                    }
+                }
+            }
         }
     }
 
@@ -8147,6 +8169,13 @@ class MainActivity : Activity() {
         for (i in 0 until watchRow.childCount) {
             val img = ((watchRow.getChildAt(i) as? ViewGroup)?.getChildAt(0) as? ViewGroup)?.getChildAt(0) as? ImageView ?: continue
             if (img.drawable == null) loadPoster(img, img.tag as? String)
+        }
+        val drawerRow = activeYtRow
+        if (drawerRow != null) {
+            for (i in 0 until drawerRow.childCount) {
+                val img = ((drawerRow.getChildAt(i) as? ViewGroup)?.getChildAt(0) as? ViewGroup)?.getChildAt(0) as? ImageView ?: continue
+                if (img.drawable == null) loadPoster(img, img.tag as? String)
+            }
         }
     }
 
