@@ -4618,20 +4618,20 @@ class MainActivity : Activity() {
                         pendingYtDrawerShow?.let { ui.removeCallbacks(it) }
                         pendingYtDrawerShow = null
                         if (isYoutubeOrSmartTube(a.pkg) && ytDrawerScroller != null && ytDrawerRow != null) {
-                            if (feedForApp(a.pkg).isNotEmpty()) {
-                                if (activeYtDrawer === ytDrawerScroller && ytDrawerScroller.visibility == View.VISIBLE && currentYtPkg == a.pkg) {
-                                    showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
-                                } else {
-                                    val task = Runnable {
-                                        if (currentFocus === v && v.isAttachedToWindow) {
-                                            showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
-                                        }
-                                    }
-                                    pendingYtDrawerShow = task
-                                    ui.postDelayed(task, 2500L)
-                                }
-                            } else {
+                            if (activeYtDrawer != null && activeYtDrawer !== ytDrawerScroller) {
                                 hideYtDrawerIfNeeded()
+                            }
+                            if (activeYtDrawer === ytDrawerScroller && ytDrawerScroller.visibility == View.VISIBLE) {
+                                showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
+                            } else {
+                                val task = Runnable {
+                                    pendingYtDrawerShow = null
+                                    if (currentFocus === v && v.isAttachedToWindow && feedForApp(a.pkg).isNotEmpty()) {
+                                        showYtDrawer(a.pkg, ytDrawerScroller, ytDrawerRow, thisRow)
+                                    }
+                                }
+                                pendingYtDrawerShow = task
+                                ui.postDelayed(task, 2000L)
                             }
                         } else {
                             hideYtDrawerIfNeeded()
@@ -7161,9 +7161,8 @@ class MainActivity : Activity() {
             hideYtDrawerIfNeeded()
             return
         }
-        val onYtApp = activeYtParentRow != null &&
-            focus.parent === activeYtParentRow &&
-            isYoutubeOrSmartTube(focus.tag as? String)
+        val onYtApp = isYoutubeOrSmartTube(focus.tag as? String) &&
+            appRows.any { it === focus.parent }
         val inDrawer = focus.getTag(R.id.watchScroll) == "yt_drawer" ||
             (activeYtRow != null && (focus.parent as? View)?.parent === activeYtRow)
         if (!onYtApp && !inDrawer) {
