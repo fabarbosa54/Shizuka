@@ -4448,11 +4448,34 @@ class MainActivity : Activity() {
     }
 
     private fun alignRow() {
+        val alignGravity = ROW_ALIGN[rowAlign()]!!.second
         for (row in appRows) {
             val content = row.parent as? View ?: continue
+            // Subtract 1 for the hidden gear button at index 0
+            val appCount = (row.childCount - 1).coerceAtLeast(0)
             (content.layoutParams as FrameLayout.LayoutParams).gravity =
-                if (row.childCount > rowTiles()) Gravity.START else ROW_ALIGN[rowAlign()]!!.second
+                if (appCount > rowTiles()) Gravity.START else alignGravity
             content.requestLayout()
+        }
+        for (titleView in categoryTitleViews) {
+            (titleView.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+                lp.gravity = alignGravity
+                titleView.layoutParams = lp
+            }
+        }
+        (watchRow.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+            lp.gravity = if (watchList.size > 4) Gravity.START else alignGravity
+            watchRow.layoutParams = lp
+        }
+        (watchTitle.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+            lp.gravity = alignGravity
+            watchTitle.layoutParams = lp
+        }
+        findViewById<TextView>(R.id.appsTitle)?.let { tv ->
+            (tv.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+                lp.gravity = alignGravity
+                tv.layoutParams = lp
+            }
         }
     }
 
@@ -4529,6 +4552,7 @@ class MainActivity : Activity() {
                         else spacing + dp(10)
                     layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
                         setMargins(0, topM, 0, dp(0))
+                        gravity = ROW_ALIGN[rowAlign()]!!.second
                     }
                     categoryTitleViews.add(this)
                 }
@@ -7492,6 +7516,10 @@ class MainActivity : Activity() {
                 drawerRow.addView(ytPreviewCard(prog))
             }
         }
+        (drawerRow.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+            lp.gravity = if (items.size > 4) Gravity.START else ROW_ALIGN[rowAlign()]!!.second
+            drawerRow.layoutParams = lp
+        }
 
         activeYtDrawer = drawerScroller
         activeYtRow = drawerRow
@@ -7828,6 +7856,7 @@ class MainActivity : Activity() {
         val focusedKey = (currentFocus?.getTag(R.id.watchRow) as? Prog)?.let { cardKey(it) } // the same show, whatever place it has now
         watchRow.removeAllViews()
         watchTitle.text = rowName()
+        alignRow()
         placeRow(animate = false)
         // ~16 ms per card here and only four show at once: the first four now, the next four on the next frame.
         addCardsTo(3)

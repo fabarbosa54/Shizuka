@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- **Tiroirs de flux dynamiques par application.** Sélectionnez une application vidéo (YouTube, SmartTube, Netflix, Prime Video, Disney+, Crunchyroll, ADN, Shadowz, RTP Play, OQEE by Free) pour déployer ses flux et reprises de lecture avec une animation en cascade fluide.
+- **Sélecteur de canaux et jauge de délai.** Choisissez les flux actifs de chaque application depuis son menu d'appui long (**Flux du tiroir**) ou depuis les paramètres, et réglez le délai d'ouverture du tiroir de **0.5 s à 3.0 s**.
+- **Support dédié OQEE by Free & RTP Play.** Détection directe des dernières chaînes TV regardées dans OQEE avec lancement direct de la chaîne, et prise en charge complète des flux RTP Play.
+- **Horloge & Météo plein écran en veille.** En mode veille / cadre photo, l'horloge, la date et la météo s'agrandissent et glissent doucement au centre de l'écran.
+- **Alignement des titres de catégories.** Les titres des catégories et de la reprise de lecture suivent désormais l'alignement choisi pour les rangées (Gauche, Centre, Droite).
+
 ## 1.0.0
 
 - **Fork de Plume.** Shizuka est un fork moderne et fluide de Plume Launcher pour Android TV.
