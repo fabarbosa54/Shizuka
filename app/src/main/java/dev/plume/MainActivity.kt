@@ -1332,7 +1332,12 @@ class MainActivity : Activity() {
         // Measured over the whole row container, so the On focus name keeps one colour as it moves from tile to tile.
         val scrollersToInk = if (appScrollers.isNotEmpty()) appScrollers else listOf(findViewById<View>(R.id.appScroll))
         appsInk = inkBehind(apps + scrollersToInk)
-        for (v in apps) ink(v, appsInk, fade = true)
+        for (v in apps) {
+            ink(v, appsInk, fade = true)
+            if (v in categoryTitleViews) {
+                (v as? TextView)?.compoundDrawablesRelative?.forEach { it?.setTint(appsInk) }
+            }
+        }
         for (lbl in appRowLabels) ink(lbl, appsInk, fade = true, strong = true)
         if (appRowLabels.isEmpty()) ink(findViewById(R.id.rowLabel), appsInk, fade = true, strong = true)
         for (row in appRows) {
@@ -4298,6 +4303,39 @@ class MainActivity : Activity() {
 
     private fun rowAlign() = prefs.getString("row_align", "left")!!.takeIf { it in ROW_ALIGN } ?: "left"
 
+    private fun categoryIconDrawable(iconKey: String, catName: String): Drawable? {
+        val key = if (iconKey == "auto") {
+            val lower = catName.lowercase()
+            when {
+                "tv" in lower || "télé" in lower || "tele" in lower || "direct" in lower || "chaine" in lower || "chaîne" in lower -> "bookmark"
+                "film" in lower || "ciné" in lower || "cine" in lower || "movie" in lower || "série" in lower || "serie" in lower -> "film"
+                "vidéo" in lower || "video" in lower || "streaming" in lower || "stream" in lower || "replay" in lower -> "film"
+                "jeu" in lower || "game" in lower || "play" in lower || "arcade" in lower -> "gamepad"
+                "musique" in lower || "music" in lower || "audio" in lower || "radio" in lower || "podcast" in lower -> "music"
+                "favori" in lower || "fav" in lower || "star" in lower -> "star"
+                "dossier" in lower || "folder" in lower || "fich" in lower || "file" in lower -> "folder"
+                "app" in lower || "outil" in lower || "tool" in lower || "syst" in lower -> "apps"
+                else -> "bookmark"
+            }
+        } else iconKey
+
+        val resId = when (key) {
+            "bookmark" -> R.drawable.ic_cat_bookmark
+            "film" -> R.drawable.ic_cat_film
+            "tv" -> R.drawable.ic_settop
+            "apps" -> R.drawable.ic_apps
+            "gamepad" -> R.drawable.ic_gamepad
+            "video" -> R.drawable.ms_video_library
+            "music" -> R.drawable.ic_cat_music
+            "star" -> R.drawable.ic_cat_star
+            "folder" -> R.drawable.ms_folder
+            "none" -> 0
+            else -> R.drawable.ic_cat_bookmark
+        }
+        if (resId == 0) return null
+        return getDrawable(resId)?.mutate()
+    }
+
     private fun categoriesList(): List<Category> =
         CategoryManager.loadCategories(prefs, getString(R.string.default_category_name), sortedApps().map { it.pkg })
 
@@ -4368,14 +4406,23 @@ class MainActivity : Activity() {
                     id = View.generateViewId()
                     text = cat.name.uppercase()
                     textSize = 12f
-                    letterSpacing = 0.1f
+                    letterSpacing = 0.08f
                     setTypeface(typeface, Typeface.BOLD)
                     alpha = 0.75f
+                    val iconDrawable = categoryIconDrawable(cat.icon, cat.name)?.apply {
+                        setBounds(0, 0, dp(15), dp(15))
+                    }
+                    if (iconDrawable != null) {
+                        setCompoundDrawablesRelative(iconDrawable, null, null, null)
+                        compoundDrawablePadding = dp(8)
+                    } else {
+                        setCompoundDrawablesRelative(null, null, null, null)
+                    }
                     val topM = if (isFirstOverall) 0
-                        else if (isBelowGroup && isFirstInGroup) spacing + dp(12)
-                        else spacing + dp(6)
+                        else if (isBelowGroup && isFirstInGroup) spacing + dp(14)
+                        else spacing + dp(10)
                     layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
-                        setMargins(0, topM, 0, dp(2))
+                        setMargins(0, topM, 0, dp(0))
                     }
                     categoryTitleViews.add(this)
                 }
@@ -4392,7 +4439,7 @@ class MainActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
                     marginStart = dp(-16)
                     marginEnd = dp(-16)
-                    topMargin = if (showTitles) dp(-24)
+                    topMargin = if (showTitles) dp(-16)
                         else if (isFirstOverall) dp(-24)
                         else if (isBelowGroup && isFirstInGroup) dp(-24) + spacing + dp(12)
                         else dp(-24) + spacing
@@ -5841,6 +5888,34 @@ class MainActivity : Activity() {
             getString(R.string.banner_mono) to "bannermono",
         )
 
+        val iconLabel = when (currentCat.icon) {
+            "bookmark" -> getString(R.string.cat_icon_bookmark)
+            "film" -> getString(R.string.cat_icon_film)
+            "tv" -> getString(R.string.cat_icon_tv)
+            "apps" -> getString(R.string.cat_icon_apps)
+            "gamepad" -> getString(R.string.cat_icon_gamepad)
+            "video" -> getString(R.string.cat_icon_video)
+            "music" -> getString(R.string.cat_icon_music)
+            "star" -> getString(R.string.cat_icon_star)
+            "folder" -> getString(R.string.cat_icon_folder)
+            "none" -> getString(R.string.cat_icon_none)
+            else -> getString(R.string.cat_icon_auto)
+        }
+
+        val iconChoices = listOf(
+            getString(R.string.cat_icon_auto) to "auto",
+            getString(R.string.cat_icon_bookmark) to "bookmark",
+            getString(R.string.cat_icon_film) to "film",
+            getString(R.string.cat_icon_tv) to "tv",
+            getString(R.string.cat_icon_apps) to "apps",
+            getString(R.string.cat_icon_gamepad) to "gamepad",
+            getString(R.string.cat_icon_video) to "video",
+            getString(R.string.cat_icon_music) to "music",
+            getString(R.string.cat_icon_star) to "star",
+            getString(R.string.cat_icon_folder) to "folder",
+            getString(R.string.cat_icon_none) to "none",
+        )
+
         val rows = listOfNotNull(
             page(getString(R.string.choose_apps), "${currentCat.apps.size}") {
                 pickAppsForCategory(currentCat.id, fromRow)
@@ -5849,6 +5924,16 @@ class MainActivity : Activity() {
                 promptCategoryName(currentCat.name, isNew = false, catId = currentCat.id) {
                     manageSingleCategory(categoriesList().firstOrNull { it.id == currentCat.id } ?: currentCat, fromRow)
                 }
+            },
+            page(getString(R.string.category_icon), iconLabel) {
+                showPage(getString(R.string.category_icon), iconChoices.map { (label, key) ->
+                    page(label, if (currentCat.icon == key) "✓" else "") {
+                        val updated = categoriesList().map { if (it.id == currentCat.id) it.copy(icon = key) else it }
+                        CategoryManager.saveCategories(prefs, updated)
+                        renderApps()
+                        manageSingleCategory(currentCat.copy(icon = key), fromRow)
+                    }
+                }, back = { manageSingleCategory(currentCat, fromRow) })
             },
             page(getString(R.string.row_size), sizeLabel) {
                 showPage(getString(R.string.row_size), sizeChoices.map { (label, key) ->

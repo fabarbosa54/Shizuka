@@ -10,7 +10,8 @@ data class Category(
     val apps: List<String> = emptyList(),
     val size: String = "inherit", // inherit, standard, large, huge
     val iconStyle: String = "inherit", // inherit, banner, mono, glyph, icon
-    val belowWatch: Boolean = false
+    val belowWatch: Boolean = false,
+    val icon: String = "auto" // auto, bookmark, film, tv, apps, gamepad, video, music, star, heart, folder, settings
 )
 
 object CategoryManager {
@@ -42,7 +43,8 @@ object CategoryManager {
                 val size = obj.optString("size", "inherit")
                 val iconStyle = obj.optString("iconStyle", "inherit")
                 val belowWatch = obj.optBoolean("belowWatch", false)
-                list.add(Category(id, name, apps, size, iconStyle, belowWatch))
+                val icon = obj.optString("icon", "auto")
+                list.add(Category(id, name, apps, size, iconStyle, belowWatch, icon))
             }
             if (list.isEmpty()) {
                 listOf(Category(DEFAULT_ID, defaultName, fallbackOrder))
@@ -68,6 +70,7 @@ object CategoryManager {
             obj.put("size", cat.size)
             obj.put("iconStyle", cat.iconStyle)
             obj.put("belowWatch", cat.belowWatch)
+            obj.put("icon", cat.icon)
             array.put(obj)
         }
         val firstCatApps = categories.firstOrNull()?.apps ?: emptyList()
