@@ -4519,6 +4519,7 @@ class MainActivity : Activity() {
             val ytDrawerScroller = if (hasYt) {
                 SnapScrollView(this, null).apply {
                     id = View.generateViewId()
+                    isFocusable = false
                     visibility = View.GONE
                     alpha = 0f
                     clipToPadding = false
@@ -5268,11 +5269,7 @@ class MainActivity : Activity() {
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
                         if (row != null && i > 0) {
                             val prevCol = row.getChildAt(i - 1) as? ViewGroup
-                            val target = prevCol?.getChildAt(0) ?: prevCol
-                            target?.also {
-                                scrollToView(it)
-                                (row.parent as? HorizontalScrollView)?.requestChildFocus(prevCol, it)
-                            }
+                            (prevCol?.getChildAt(0) ?: prevCol)?.also { scrollToView(it) }
                         } else {
                             v
                         }
@@ -5280,11 +5277,7 @@ class MainActivity : Activity() {
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         if (row != null && i in 0 until row.childCount - 1) {
                             val nextCol = row.getChildAt(i + 1) as? ViewGroup
-                            val target = nextCol?.getChildAt(0) ?: nextCol
-                            target?.also {
-                                scrollToView(it)
-                                (row.parent as? HorizontalScrollView)?.requestChildFocus(nextCol, it)
-                            }
+                            (nextCol?.getChildAt(0) ?: nextCol)?.also { scrollToView(it) }
                         } else {
                             v
                         }
@@ -7094,6 +7087,7 @@ class MainActivity : Activity() {
     }
 
     private fun checkYtDrawerFocus() {
+        if (activeYtRow?.hasFocus() == true) return
         val focus = currentFocus ?: run {
             hideYtDrawerIfNeeded()
             return
