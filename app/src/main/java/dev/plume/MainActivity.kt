@@ -4572,6 +4572,20 @@ class MainActivity : Activity() {
                 if (focusedTag != null && t.tag == focusedTag) firstFocusedView = t
                 if (firstFocusedView == null && isFirstOverall && i == 0) firstFocusedView = t
             }
+
+            val isYtRow = cat.name.contains("youtube", ignoreCase = true) ||
+                catPkgs.any { it.contains("youtube", ignoreCase = true) || it.contains("smarttube", ignoreCase = true) }
+            if (isYtRow && youtubeFeed.isNotEmpty()) {
+                youtubeFeed.forEachIndexed { ytIdx, prog ->
+                    val card = inlineVideoCard(prog, tileH)
+                    val cardW = tileH * 16 / 9
+                    val lp = LinearLayout.LayoutParams(cardW, tileH).apply {
+                        marginEnd = gap
+                        if (ytIdx == 0) marginStart = dp(12)
+                    }
+                    thisRow.addView(card, lp)
+                }
+            }
         }
 
         catsAbove.forEachIndexed { idx, cat ->
@@ -4741,7 +4755,7 @@ class MainActivity : Activity() {
             if (!always) continue
             for (j in 0 until row.childCount) {
                 val t = row.getChildAt(j)
-                if (t.tag?.toString()?.startsWith("category_gear:") == true) continue
+                if (t.tag?.toString()?.startsWith("category_gear:") == true || t.getTag(R.id.watchRow) is Prog) continue
                 nameRow.addView(fittingLabel(t.contentDescription?.toString() ?: "", 13f).apply {
                     gravity = Gravity.CENTER
                     alpha = if (dark) 0.85f else 1f
@@ -5258,8 +5272,8 @@ class MainActivity : Activity() {
                 appRows.firstOrNull()?.getChildAt(0)?.requestFocus()
             }
             v.parent === wifi.parent -> topMenu(v)
-            appRows.any { it === v.parent } -> appMenu(v)
             v.getTag(R.id.watchRow) is Prog -> watchMenu(v, v.getTag(R.id.watchRow) as Prog)
+            appRows.any { it === v.parent } -> appMenu(v)
         }
     }
 
@@ -6771,8 +6785,51 @@ class MainActivity : Activity() {
                 android.util.Log.w("Plume", "continue watching failed ($e)")
                 emptyList()
             }
-            ui.post { if (!isDestroyed) showWatchNext(list) }
+            val ytList = try { queryYoutubeFeed() } catch (_: Exception) { emptyList() }
+            ui.post {
+                if (!isDestroyed) {
+                    showWatchNext(list)
+                    updateYoutubeWidget(ytList)
+                }
+            }
         }
+    }
+
+    private fun updateYoutubeWidget(list: List<Prog>) {
+        val key = list.joinToString("|") { "${it.title}/${it.progress}/${it.image}" }
+        if (key != youtubeFeedKey) {
+            youtubeFeedKey = key
+            youtubeFeed = list
+            renderApps()
+        }
+    }
+
+    private fun queryYoutubeFeed(): List<Prog> {
+        val ytPackages = setOf(
+            "com.google.android.youtube.tv",
+            "com.liskovsoft.smarttubetv",
+            "com.liskovsoft.smarttubetv.beta",
+            "org.smarttube.stable",
+            "org.smarttube.beta"
+        )
+        val channels = appChannels().filter { (_, p, _) ->
+            p in ytPackages || p.contains("youtube", ignoreCase = true) || p.contains("smarttube", ignoreCase = true)
+        }
+        if (channels.isEmpty()) return emptyList()
+
+        val priorityChannels = channels.filter { (_, _, name) ->
+            val n = name.lowercase()
+            n.contains("subscription") || n.contains("abonnement") || n.contains("recommended") || n.contains("recommandation")
+        }.ifEmpty { channels }
+
+        val hidden = prefs.getStringSet("hidden_watch", emptySet()) ?: emptySet()
+        val progs = priorityChannels.flatMap { (id) ->
+            readPrograms(TvContract.buildPreviewProgramsUriForChannel(id), hidden, "yt$id")
+        }.map { it.second }
+
+        return progs.filter { !it.image.isNullOrEmpty() }
+            .distinctBy { it.intent ?: it.title }
+            .take(10)
     }
 
     /**
@@ -6988,6 +7045,8 @@ class MainActivity : Activity() {
     }
 
     private var watchList = emptyList<Prog>()
+    private var youtubeFeed = emptyList<Prog>()
+    private var youtubeFeedKey: String? = null
 
     /** "always", "down" (hidden until Down reaches it) or "never". */
     private fun rowShow() = prefs.getString("row_show", "always")!!.takeIf { it in ROW_SHOW } ?: "always"
@@ -7111,6 +7170,73 @@ class MainActivity : Activity() {
         }
         loadPoster(img, p.image)
         return col
+    }
+
+    private fun inlineVideoCard(p: Prog, tileH: Int): View {
+        val w = tileH * 16 / 9
+        val frame = FrameLayout(this).apply {
+            id = View.generateViewId()
+            clipChildren = true
+            clipToOutline = true
+        }
+
+        val img = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(if (dark) DARK_SURFACE else 0xFFDDE1E5.toInt())
+        }
+        frame.addView(img, MATCH_PARENT, MATCH_PARENT)
+
+        val scrim = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.TRANSPARENT, 0xCC000000.toInt())
+            )
+        }
+        frame.addView(scrim, FrameLayout.LayoutParams(MATCH_PARENT, tileH * 3 / 5, Gravity.BOTTOM))
+
+        val icon = sourceIcon(p.pkg)
+        if (icon != null) {
+            val badge = ImageView(this).apply {
+                setImageDrawable(icon)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }
+            frame.addView(badge, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.TOP or Gravity.START).apply {
+                setMargins(dp(6), dp(6), 0, 0)
+            })
+        }
+
+        val title = label(p.title, 11f).apply {
+            setTextColor(Color.WHITE)
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.MARQUEE
+            marqueeRepeatLimit = -1
+            setPadding(dp(8), 0, dp(8), dp(6))
+        }
+        frame.addView(title, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
+
+        if (p.progress > 0) {
+            val pb = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                max = 100
+                progress = p.progress
+                progressDrawable = progressBarDrawable(Color.WHITE, p.pkg)
+            }
+            frame.addView(pb, FrameLayout.LayoutParams(MATCH_PARENT, dp(3), Gravity.BOTTOM))
+        }
+
+        style(frame, tileRadius(), card = true, lift = 1.08f, frost = false) { focused ->
+            title.isSelected = focused
+            if (focused) {
+                lastApp = frame
+                scrollToView(frame)
+            }
+            showRowLabel(frame, false)
+        }
+
+        frame.contentDescription = p.title
+        frame.setOnClickListener { open(p) }
+        frame.setTag(R.id.watchRow, p)
+        loadPoster(img, p.image)
+        return frame
     }
 
     /** [ink] fills it; the track is a faint version on the same side, light behind white and dark behind near-black. */
