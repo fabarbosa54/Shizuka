@@ -1157,7 +1157,7 @@ class MainActivity : Activity() {
         when {
             settingsScrim.visibility == View.VISIBLE -> pageBack?.invoke() ?: closeLauncherSettings()
             allApps.visibility == View.VISIBLE -> closeAllApps()
-            activeYtRow != null && currentFocus?.parent?.parent === activeYtRow -> {
+            currentFocus?.getTag(R.id.watchScroll) == "yt_drawer" || (activeYtRow != null && (currentFocus?.parent as? View)?.parent === activeYtRow) -> {
                 val parentRow = activeYtParentRow
                 val ytTile = (0 until (parentRow?.childCount ?: 0))
                     .mapNotNull { parentRow?.getChildAt(it) }
@@ -5260,16 +5260,34 @@ class MainActivity : Activity() {
                     else -> null
                 }
             }
-            (v.parent as? View)?.parent === activeYtRow -> {
-                val col = v.parent as View
-                val row = activeYtRow!!
-                val i = row.indexOfChild(col)
+            v.getTag(R.id.watchScroll) == "yt_drawer" || (v.parent as? View)?.parent === activeYtRow -> {
+                val col = v.parent as? ViewGroup
+                val row = (col?.parent as? LinearLayout) ?: activeYtRow
+                val i = if (col != null && row != null) row.indexOfChild(col) else -1
                 when (key) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        if (i > 0) (row.getChildAt(i - 1) as? ViewGroup)?.getChildAt(0) else v
+                        if (row != null && i > 0) {
+                            val prevCol = row.getChildAt(i - 1) as? ViewGroup
+                            val target = prevCol?.getChildAt(0) ?: prevCol
+                            target?.also {
+                                scrollToView(it)
+                                (row.parent as? HorizontalScrollView)?.requestChildFocus(prevCol, it)
+                            }
+                        } else {
+                            v
+                        }
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (i < row.childCount - 1) (row.getChildAt(i + 1) as? ViewGroup)?.getChildAt(0) else v
+                        if (row != null && i in 0 until row.childCount - 1) {
+                            val nextCol = row.getChildAt(i + 1) as? ViewGroup
+                            val target = nextCol?.getChildAt(0) ?: nextCol
+                            target?.also {
+                                scrollToView(it)
+                                (row.parent as? HorizontalScrollView)?.requestChildFocus(nextCol, it)
+                            }
+                        } else {
+                            v
+                        }
                     }
                     KeyEvent.KEYCODE_DPAD_UP -> {
                         val target = (0 until (activeYtParentRow?.childCount ?: 0))
@@ -5277,7 +5295,7 @@ class MainActivity : Activity() {
                             .firstOrNull { it.tag == currentYtPkg }
                             ?: activeYtParentRow?.getChildAt(1)
                             ?: activeYtParentRow?.getChildAt(0)
-                        target?.also { scrollToView(it) }
+                        target?.also { scrollToView(it) } ?: v
                     }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
                         val parentRow = activeYtParentRow
@@ -5296,12 +5314,12 @@ class MainActivity : Activity() {
                             }
                             else -> v
                         }
-                        nextTarget?.also { if (it !== v) scrollToView(it) }
+                        nextTarget?.also { if (it !== v) scrollToView(it) } ?: v
                     }
                     else -> null
                 }
             }
-            v.getTag(R.id.watchRow) is Prog -> {
+            v.getTag(R.id.watchRow) is Prog && v.getTag(R.id.watchScroll) != "yt_drawer" && watchRow.indexOfChild(v.parent as? View) >= 0 -> {
                 val i = watchRow.indexOfChild(v.parent as View)
                 val lastAppAbove = appRowsAbove.lastOrNull { it.childCount > 0 }
                 val firstAppBelow = appRowsBelow.firstOrNull { it.childCount > 0 }
@@ -6955,7 +6973,8 @@ class MainActivity : Activity() {
             return
         }
 
-        val wasVisible = drawerScroller.visibility == View.VISIBLE
+        ytDrawerAnim?.cancel()
+        val wasFullyOpen = drawerScroller.visibility == View.VISIBLE && drawerScroller.height >= dp(100)
         val isNewPkg = currentYtPkg != pkg
 
         if (isNewPkg || drawerRow.childCount == 0) {
@@ -6970,7 +6989,7 @@ class MainActivity : Activity() {
         activeYtParentRow = parentAppRow
         currentYtPkg = pkg
 
-        if (wasVisible) {
+        if (wasFullyOpen) {
             if (isNewPkg) {
                 for (idx in 0 until drawerRow.childCount) {
                     val cardCol = drawerRow.getChildAt(idx)
@@ -6986,15 +7005,15 @@ class MainActivity : Activity() {
                 }
             }
         } else {
-            ytDrawerAnim?.cancel()
             drawerScroller.visibility = View.VISIBLE
             drawerScroller.measure(
                 View.MeasureSpec.makeMeasureSpec(resources.displayMetrics.widthPixels, View.MeasureSpec.AT_MOST),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
             )
             val targetH = drawerScroller.measuredHeight.coerceAtLeast(dp(156))
-            drawerScroller.layoutParams.height = 0
-            drawerScroller.alpha = 0f
+            val startH = maxOf(drawerScroller.height, 0)
+            drawerScroller.layoutParams.height = startH
+            drawerScroller.alpha = if (targetH > 0) startH.toFloat() / targetH else 0f
             drawerScroller.requestLayout()
 
             // Cascade sur les cartes
@@ -7011,7 +7030,7 @@ class MainActivity : Activity() {
                     .start()
             }
 
-            ytDrawerAnim = ValueAnimator.ofInt(0, targetH).apply {
+            ytDrawerAnim = ValueAnimator.ofInt(startH, targetH).apply {
                 duration = 240
                 interpolator = DECELERATE
                 addUpdateListener { anim ->
@@ -7082,8 +7101,8 @@ class MainActivity : Activity() {
         val onYtApp = activeYtParentRow != null &&
             focus.parent === activeYtParentRow &&
             isYoutubeOrSmartTube(focus.tag as? String)
-        val inDrawer = activeYtRow != null &&
-            (focus.parent as? View)?.parent === activeYtRow
+        val inDrawer = focus.getTag(R.id.watchScroll) == "yt_drawer" ||
+            (activeYtRow != null && (focus.parent as? View)?.parent === activeYtRow)
         if (!onYtApp && !inDrawer) {
             hideYtDrawerIfNeeded()
         }
@@ -7456,6 +7475,7 @@ class MainActivity : Activity() {
             tag = p.intent ?: p.title
             contentDescription = p.title
             setTag(R.id.watchRow, p)
+            setTag(R.id.watchScroll, "yt_drawer")
         }
 
         val img = ImageView(this).apply {
@@ -7487,10 +7507,10 @@ class MainActivity : Activity() {
         style(frame, tileRadius(), card = true, lift = 1.08f, frost = false) { focused ->
             title.isSelected = focused
             if (focused) {
-                lastApp = frame
                 scrollToView(frame)
+            } else {
+                ui.post { checkYtDrawerFocus() }
             }
-            checkYtDrawerFocus()
         }
 
         frame.setOnClickListener { open(p) }
