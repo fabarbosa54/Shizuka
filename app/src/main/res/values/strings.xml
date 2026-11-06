@@ -411,6 +411,11 @@
     <string name="input_name_hint">Device name</string>
     <string name="manage_inputs">Manage inputs</string>
     <string name="row_spacing">Row spacing</string>
+    <string name="cw_vertical_position">Continue Watching position</string>
+    <string name="help_cw_vertical_position">Adjusts vertical placement and elevation of Continue Watching.</string>
+    <string name="cw_pos_high">High (raised)</string>
+    <string name="cw_pos_normal">Normal</string>
+    <string name="cw_pos_low">Low</string>
     <string name="help_row_spacing">Adjust the vertical space between rows.</string>
     <string name="spacing_very_compact">Very compact</string>
     <string name="spacing_compact">Compact</string>

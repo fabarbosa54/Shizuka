@@ -3114,6 +3114,11 @@ class MainActivity : Activity() {
                 showWatchNext(watchList)
                 renderSettings(R.string.show_icons)
             },
+            R.string.cw_vertical_position to { d ->
+                prefs.edit().putString("cw_position", CW_POSITIONS.keys.toList().step(cwPosition(), d)).apply()
+                renderApps()
+                renderSettings(R.string.cw_vertical_position)
+            },
             R.string.glass to { d ->
                 val styles = if (currentWallpaper().startsWith("video:")) GLASS_STYLES - GlassStyle.CLEAR else GLASS_STYLES
                 prefs.edit().putString("glass_style", styles.step(glassStyle().let { if (it in styles) it else GlassStyle.FROSTED }, d)?.key ?: "off").apply()
@@ -3180,6 +3185,9 @@ class MainActivity : Activity() {
                 renderSettings(R.string.restore_hidden)
             },
             R.string.cw_apps to Triple(getString(R.string.cw_apps), if (cwOff == 0) getString(R.string.all_on) else getString(R.string.n_off, cwOff)) { pickWatchSources() },
+            R.string.cw_vertical_position to Triple(getString(R.string.cw_vertical_position), getString(CW_POSITIONS[cwPosition()] ?: R.string.cw_pos_high)) {
+                steps[R.string.cw_vertical_position]!!(1)
+            },
             R.string.cw_channels to Triple(getString(R.string.cw_channels), getString(R.string.n_on, channelsOn)) { pickChannels() },
             R.string.row_name to Triple(getString(R.string.row_name), rowName()) { pickRowName() },
             R.string.show_icons to Triple(getString(R.string.show_icons), getString(if (cwColour()) R.string.colour else R.string.monochrome)) {
@@ -3271,7 +3279,7 @@ class MainActivity : Activity() {
                 listOf(R.string.edit_apps_row, R.string.apps_in_row, R.string.categories, R.string.sort_apps, R.string.icon_style, R.string.row_size, R.string.row_spacing, R.string.app_names, R.string.row_position)),
             // "When hidden" only means something once the row can hide.
             Triple(R.string.bottom_row, "${rowName()} · ${rows[R.string.show_row]!!.second}", listOfNotNull(R.string.show_row, R.string.apps_when_hidden.takeIf { rowShow() != "always" },
-                R.string.row_name, R.string.show_icons, R.string.cw_apps, R.string.cw_channels, R.string.restore_hidden)),
+                R.string.cw_vertical_position, R.string.row_name, R.string.show_icons, R.string.cw_apps, R.string.cw_channels, R.string.restore_hidden)),
             Triple(R.string.section_clock_weather, if (weather == "off") on(false) else "${rows[R.string.weather_units]!!.second} · ${prefs.getString("geo_city", null) ?: rows[R.string.weather_location]!!.second}",
                 listOf(R.string.clock_style, R.string.clock_size, R.string.clock_seconds, R.string.weather, R.string.weather_units, R.string.weather_location)),
             Triple(R.string.section_screensaver, rows[R.string.screensaver]!!.second, listOf(R.string.screensaver, R.string.idle_clean, R.string.test_screensaver, R.string.screensaver_timing)),
@@ -3305,6 +3313,7 @@ class MainActivity : Activity() {
                 R.string.tile_radius to TILE_RADII.values.map { getString(it.first) to null },
                 R.string.row_position to ROW_ALIGN.values.map { getString(it.first) to null },
                 R.string.show_row to ROW_SHOW.values.map { getString(it) to null },
+                R.string.cw_vertical_position to CW_POSITIONS.values.map { getString(it) to null },
                 R.string.apps_when_hidden to listOf(R.string.stays_put, R.string.moves_down).map { getString(it) to null },
                 R.string.show_icons to listOf(R.string.monochrome, R.string.colour).map { getString(it) to null },
                 R.string.weather_units to listOf("°C" to null, "°F" to null),
@@ -4587,7 +4596,7 @@ class MainActivity : Activity() {
 
         showNames()
         alignRow()
-        findViewById<TextView>(R.id.watchTitle)?.let { (it.layoutParams as? LinearLayout.LayoutParams)?.topMargin = maxOf(dp(20), rowSpacingPx() + dp(18)) }
+        findViewById<TextView>(R.id.watchTitle)?.let { (it.layoutParams as? LinearLayout.LayoutParams)?.topMargin = maxOf(dp(4), rowSpacingPx() + cwSpacingPx()) }
         if (takeFocus) (firstFocusedView ?: appRows.firstOrNull()?.getChildAt(1) ?: appRows.firstOrNull()?.getChildAt(0))?.requestFocus()
         if (!prefs.getBoolean("tip_move", false)) {
             prefs.edit().putBoolean("tip_move", true).apply()
@@ -4613,6 +4622,14 @@ class MainActivity : Activity() {
         "spacious" -> dp(20)
         "wide" -> dp(36)
         else -> dp(8)
+    }
+
+    private fun cwPosition() = prefs.getString("cw_position", "high")?.takeIf { it in CW_POSITIONS } ?: "high"
+
+    private fun cwSpacingPx(): Int = when (cwPosition()) {
+        "high" -> dp(-14)
+        "low" -> dp(20)
+        else -> dp(4)
     }
 
     /** "standard", "large" or "largest": how big the home row's tiles and banners are. */
@@ -7347,7 +7364,7 @@ class MainActivity : Activity() {
             R.string.icon_style to R.drawable.ms_apps, R.string.row_size to R.drawable.ms_format_size, R.string.row_spacing to R.drawable.ic_row_spacing, R.string.tile_radius to R.drawable.ms_apps, R.string.glow_style to R.drawable.ms_palette, R.string.focus_dimming to R.drawable.ms_visibility, R.string.app_names to R.drawable.ms_label,
             R.string.row_position to R.drawable.ms_format_align_left,
             R.string.show_row to R.drawable.ms_visibility, R.string.apps_when_hidden to R.drawable.ms_vertical_align_bottom, R.string.row_name to R.drawable.ms_edit,
-            R.string.show_icons to R.drawable.ms_badge, R.string.cw_apps to R.drawable.ms_widgets, R.string.cw_channels to R.drawable.ms_podcasts,
+            R.string.show_icons to R.drawable.ms_badge, R.string.cw_vertical_position to R.drawable.ms_vertical_align_bottom, R.string.cw_apps to R.drawable.ms_widgets, R.string.cw_channels to R.drawable.ms_podcasts,
             R.string.restore_hidden to R.drawable.ms_visibility_off,
             R.string.clock_style to R.drawable.ms_schedule, R.string.clock_size to R.drawable.ms_format_size, R.string.clock_seconds to R.drawable.ms_timer, R.string.weather to R.drawable.ms_partly_cloudy_day, R.string.weather_units to R.drawable.ms_thermostat, R.string.weather_location to R.drawable.ms_location_on,
             R.string.backup_restore to R.drawable.ms_folder,
@@ -7378,12 +7395,18 @@ class MainActivity : Activity() {
             R.string.sort_apps to R.string.help_order, R.string.icon_style to R.string.help_icon_style, R.string.row_size to R.string.help_row_size, R.string.row_spacing to R.string.help_row_spacing,
             R.string.tile_radius to R.string.help_tile_radius, R.string.glow_style to R.string.help_glow_style, R.string.focus_dimming to R.string.help_focus_dimming,
             R.string.apps_when_hidden to R.string.help_apps_when_hidden, R.string.row_name to R.string.help_row_name,
+            R.string.cw_vertical_position to R.string.help_cw_vertical_position,
             R.string.show_icons to R.string.help_show_icons,
             R.string.cw_apps to R.string.help_from_apps, R.string.cw_channels to R.string.help_channels,
             R.string.wp_sources to R.string.help_wp_sources, R.string.restore_hidden to R.string.help_hidden_shows, R.string.screensaver_timing to R.string.help_start_after,
             R.string.home_button to R.string.help_home_button, R.string.smooth_volume to R.string.help_smooth_volume,
             R.string.default_launcher to R.string.help_default_launcher,
             R.string.setup_home to R.string.help_run_setup, R.string.section_keys to R.string.help_remote_keys,
+        )
+        val CW_POSITIONS = linkedMapOf(
+            "high" to R.string.cw_pos_high,
+            "normal" to R.string.cw_pos_normal,
+            "low" to R.string.cw_pos_low,
         )
         val ROW_SHOW = linkedMapOf("always" to R.string.always, "down" to R.string.on_down, "never" to R.string.never) // "Show row"
         val CLOCK_SIZES = linkedMapOf(38 to R.string.clock_small, 48 to R.string.clock_medium, 60 to R.string.clock_large) // sp

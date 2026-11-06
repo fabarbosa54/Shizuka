@@ -320,6 +320,11 @@
     <string name="input_name_hint">Nom du périphérique</string>
     <string name="manage_inputs">Gérer les périphériques</string>
     <string name="row_spacing">Espacement des lignes</string>
+    <string name="cw_vertical_position">Position de Reprendre la lecture</string>
+    <string name="help_cw_vertical_position">Ajuste la position verticale et le rehaussement de la rangée Reprendre la lecture.</string>
+    <string name="cw_pos_high">Haute (rehaussée)</string>
+    <string name="cw_pos_normal">Normale</string>
+    <string name="cw_pos_low">Basse</string>
     <string name="help_row_spacing">Ajuste la distance verticale entre les lignes.</string>
     <string name="spacing_very_compact">Très serré</string>
     <string name="spacing_compact">Serré</string>
