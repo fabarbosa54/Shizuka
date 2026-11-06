@@ -3048,6 +3048,7 @@ class MainActivity : Activity() {
         val rowHidden = rowHiddenSet().count { pkg -> apps.any { it.pkg == pkg } }
         val chFlip = prefs.getStringSet("ch_flip", emptySet())!!
         val channelsOn = (if (WATCH_NEXT in chFlip) 0 else 1) + appChannels().distinctBy { (_, p, n) -> channelKey(p, n) }.count { (_, p, n) -> channelOn(n, channelKey(p, n), chFlip) }
+        val ytChannelsOn = appChannels().distinctBy { (_, p, n) -> channelKey(p, n) }.count { (_, p, n) -> isYoutubeOrSmartTube(p) && ytChannelOn(p, n) }
         val names = rowNames()
         // Rows with more than two values also step back with Left; two-value rows flip either way.
         val steps = mutableMapOf<Int, (Int) -> Unit>(
@@ -3161,6 +3162,7 @@ class MainActivity : Activity() {
             },
             R.string.apps_in_row to Triple(getString(R.string.apps_in_row), if (rowHidden == 0) getString(R.string.all) else getString(R.string.n_of_m, apps.size - rowHidden, apps.size)) { pickRowApps() },
             R.string.categories to Triple(getString(R.string.categories), "${categoriesList().size}") { pickCategoriesSettings() },
+            R.string.yt_drawer_channels to Triple(getString(R.string.yt_drawer_channels), getString(R.string.n_on, ytChannelsOn)) { pickYtChannels(forPkg = null, fromAppMenu = false) },
             R.string.inputs_bar to Triple(getString(R.string.inputs_bar), "${TopInputManager.loadInputs(prefs, hdmiInputs().map { it.pkg to it.label }).count { !it.hidden }}") { pickInputsSettings() },
             R.string.row_position to Triple(getString(R.string.row_position), getString(ROW_ALIGN[rowAlign()]!!.first)) {
                 steps[R.string.row_position]!!(1)
@@ -3286,7 +3288,7 @@ class MainActivity : Activity() {
             Triple(R.string.section_style, "${rows[R.string.theme]!!.second} · ${getString(glassName())}",
                 listOf(R.string.theme, R.string.glass, R.string.app_animations, R.string.tile_radius, R.string.glow_style, R.string.focus_dimming)),
             Triple(R.string.section_app_row, "${rows[R.string.apps_in_row]!!.second} · ${rows[R.string.row_position]!!.second}",
-                listOf(R.string.edit_apps_row, R.string.apps_in_row, R.string.categories, R.string.sort_apps, R.string.icon_style, R.string.row_size, R.string.row_spacing, R.string.app_names, R.string.row_position)),
+                listOf(R.string.edit_apps_row, R.string.apps_in_row, R.string.categories, R.string.yt_drawer_channels, R.string.sort_apps, R.string.icon_style, R.string.row_size, R.string.row_spacing, R.string.app_names, R.string.row_position)),
             // "When hidden" only means something once the row can hide.
             Triple(R.string.bottom_row, "${rowName()} · ${rows[R.string.show_row]!!.second}", listOfNotNull(R.string.show_row, R.string.apps_when_hidden.takeIf { rowShow() != "always" },
                 R.string.cw_vertical_position, R.string.row_name, R.string.show_icons, R.string.cw_apps, R.string.cw_channels, R.string.restore_hidden)),
@@ -5390,6 +5392,10 @@ class MainActivity : Activity() {
         val cats = categoriesList()
         holdMenu(v, listOfNotNull(
             getString(R.string.move) to { startEdit(grab = v, once = true) },
+            if (isYoutubeOrSmartTube(pkg)) getString(R.string.yt_drawer_feed) to {
+                openLauncherSettings()
+                pickYtChannels(forPkg = pkg, fromAppMenu = true)
+            } else null,
             if (cats.size > 1 || cats.isNotEmpty()) getString(R.string.move_to_category) to { chooseCategoryForApp(v, pkg) } else null,
             getString(R.string.remove_from_row) to {
                 val i = currentRow.indexOfChild(v)
@@ -6902,13 +6908,21 @@ class MainActivity : Activity() {
         return pkg.contains("youtube", ignoreCase = true) || pkg.contains("smarttube", ignoreCase = true)
     }
 
+    private fun ytChannelOn(pkg: String, name: String): Boolean {
+        val saved = prefs.getStringSet("yt_channels", null)
+        if (saved != null) return channelKey(pkg, name) in saved
+        // Par défaut (si l'utilisateur n'a encore rien configuré), on active uniquement les canaux Recommandations / Accueil / Abonnements
+        val n = name.lowercase()
+        return "recommend" in n || "recommand" in n || "accueil" in n || "home" in n || "subscri" in n || "abonn" in n
+    }
+
     private fun feedForApp(pkg: String): List<Prog> {
         val exact = youtubeFeed.filter { it.pkg == pkg }
         return if (exact.isNotEmpty()) exact.take(10) else youtubeFeed.take(10)
     }
 
     private fun updateYoutubeWidget(list: List<Prog>) {
-        val key = list.joinToString("|") { "${it.title}/${it.progress}/${it.image}" }
+        val key = list.joinToString("|") { "${it.pkg}/${it.title}/${it.progress}/${it.image}" }
         if (key != youtubeFeedKey) {
             youtubeFeedKey = key
             youtubeFeed = list
@@ -6917,6 +6931,7 @@ class MainActivity : Activity() {
             val drawerRow = activeYtRow
             val parentRow = activeYtParentRow
             if (currentPkg != null && drawerScroller != null && drawerRow != null && parentRow != null && drawerScroller.visibility == View.VISIBLE) {
+                drawerRow.removeAllViews()
                 showYtDrawer(currentPkg, drawerScroller, drawerRow, parentRow)
             }
         }
@@ -6936,16 +6951,18 @@ class MainActivity : Activity() {
         if (channels.isEmpty()) return emptyList()
 
         val hidden = prefs.getStringSet("hidden_watch", emptySet()) ?: emptySet()
+        val hasSaved = prefs.getStringSet("yt_channels", null) != null
         val channelsByPkg = channels.groupBy { it.second }
         val result = mutableListOf<Prog>()
 
         for ((pkg, pkgChannels) in channelsByPkg) {
-            val priorityChannels = pkgChannels.filter { (_, _, name) ->
-                val n = name.lowercase()
-                n.contains("subscription") || n.contains("abonnement") || n.contains("recommended") || n.contains("recommandation")
-            }.ifEmpty { pkgChannels }
+            val activeChannels = pkgChannels.filter { (_, p, name) ->
+                ytChannelOn(p, name)
+            }.let { filtered ->
+                if (filtered.isEmpty() && !hasSaved) pkgChannels.take(1) else filtered
+            }
 
-            val progs = priorityChannels.flatMap { (id) ->
+            val progs = activeChannels.flatMap { (id) ->
                 readPrograms(TvContract.buildPreviewProgramsUriForChannel(id), hidden, "yt$id")
             }.map { pair ->
                 val p = pair.second
@@ -6957,6 +6974,42 @@ class MainActivity : Activity() {
             result.addAll(progs)
         }
         return result
+    }
+
+    private fun pickYtChannels(forPkg: String? = null, fromAppMenu: Boolean = false, focus: Int = 0) {
+        val allYt = appChannels()
+            .filter { (_, p, _) -> isYoutubeOrSmartTube(p) }
+            .distinctBy { (_, p, n) -> channelKey(p, n) }
+        val channels = if (forPkg != null) allYt.filter { it.second == forPkg } else allYt
+        if (channels.isEmpty()) {
+            if (fromAppMenu && settingsScrim.visibility == View.VISIBLE) closeLauncherSettings()
+            toast("Aucun canal trouvé. Ouvrez l'application pour charger les flux.")
+            return
+        }
+        val labelMap = apps.associate { it.pkg to it.label }
+        fun appName(p: String) = labelMap[p] ?: try {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(p, 0)).toString()
+        } catch (_: PackageManager.NameNotFoundException) { p }
+
+        val pageTitle = if (forPkg != null) "${appName(forPkg)} · ${getString(R.string.yt_drawer_feed)}" else getString(R.string.yt_drawer_channels)
+        val rows = channels.mapIndexed { i, (_, p, n) ->
+            val title = if (forPkg != null || n == appName(p)) n else "${appName(p)} · $n"
+            val isOn = ytChannelOn(p, n)
+            val state = getString(if (isOn) R.string.on else R.string.off)
+            page(title, state) {
+                val current = prefs.getStringSet("yt_channels", null)?.toMutableSet()
+                    ?: allYt.filter { ytChannelOn(it.second, it.third) }.map { channelKey(it.second, it.third) }.toMutableSet()
+                val key = channelKey(p, n)
+                if (key in current) current.remove(key) else current.add(key)
+                prefs.edit().putStringSet("yt_channels", current).apply()
+                youtubeFeedKey = null
+                refreshWatchNext()
+                pickYtChannels(forPkg, fromAppMenu, i)
+            }
+        }
+        showPage(pageTitle, rows, focus = focus, crumb = if (fromAppMenu) null else getString(R.string.section_app_row)) {
+            if (fromAppMenu) closeLauncherSettings() else renderSettings(R.string.yt_drawer_channels)
+        }
     }
 
     private fun showYtDrawer(pkg: String, drawerScroller: View, drawerRow: LinearLayout, parentAppRow: LinearLayout) {
@@ -7763,7 +7816,7 @@ class MainActivity : Activity() {
         val ROW_ICONS = mapOf(
             R.string.theme to R.drawable.ms_contrast, R.string.glass to R.drawable.ms_blur_on, R.string.app_animations to R.drawable.ms_open_in_full,
             R.string.edit_apps_row to R.drawable.ms_swap_horiz, R.string.apps_in_row to R.drawable.ms_checklist, R.string.sort_apps to R.drawable.ms_sort,
-            R.string.categories to R.drawable.ms_view_carousel, R.string.inputs_bar to R.drawable.ic_hdmi,
+            R.string.categories to R.drawable.ms_view_carousel, R.string.yt_drawer_channels to R.drawable.ms_video_library, R.string.inputs_bar to R.drawable.ic_hdmi,
             R.string.icon_style to R.drawable.ms_apps, R.string.row_size to R.drawable.ms_format_size, R.string.row_spacing to R.drawable.ic_row_spacing, R.string.tile_radius to R.drawable.ms_apps, R.string.glow_style to R.drawable.ms_palette, R.string.focus_dimming to R.drawable.ms_visibility, R.string.app_names to R.drawable.ms_label,
             R.string.row_position to R.drawable.ms_format_align_left,
             R.string.show_row to R.drawable.ms_visibility, R.string.apps_when_hidden to R.drawable.ms_vertical_align_bottom, R.string.row_name to R.drawable.ms_edit,
@@ -7794,7 +7847,7 @@ class MainActivity : Activity() {
             R.string.section_lock to R.string.help_lock,
             R.string.weather_location to R.string.help_location,
             R.string.edit_apps_row to R.string.help_rearrange, R.string.apps_in_row to R.string.help_choose_apps,
-            R.string.categories to R.string.categories, R.string.inputs_bar to R.string.inputs_in_bar,
+            R.string.categories to R.string.categories, R.string.yt_drawer_channels to R.string.help_yt_drawer_channels, R.string.inputs_bar to R.string.inputs_in_bar,
             R.string.sort_apps to R.string.help_order, R.string.icon_style to R.string.help_icon_style, R.string.row_size to R.string.help_row_size, R.string.row_spacing to R.string.help_row_spacing,
             R.string.tile_radius to R.string.help_tile_radius, R.string.glow_style to R.string.help_glow_style, R.string.focus_dimming to R.string.help_focus_dimming,
             R.string.apps_when_hidden to R.string.help_apps_when_hidden, R.string.row_name to R.string.help_row_name,
