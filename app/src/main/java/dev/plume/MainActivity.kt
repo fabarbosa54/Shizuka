@@ -1193,18 +1193,90 @@ class MainActivity : Activity() {
         return Color.HSVToColor(hsv)
     }
 
-    /** Photo-frame mode: the rows and icons fade away, leaving the wallpaper, the clock and the weather. */
+    /** Photo-frame mode: the rows and icons fade away, leaving the wallpaper, the clock and the weather centered on screen. */
     private fun setClean(on: Boolean, animate: Boolean = true) {
         if (clean == on) return
         clean = on
+        if (on) hideYtDrawerIfNeeded()
         val views = listOf(R.id.inputsContainer, R.id.homeVerticalScroll, R.id.topMenuToggle, R.id.wifi, R.id.sourcesButton,
-            R.id.allAppsButton, R.id.systemSettings, R.id.launcherSettings, R.id.powerButton).mapNotNull { findViewById<View>(it) }
+            R.id.allAppsButton, R.id.systemSettings, R.id.launcherSettings, R.id.powerButton, R.id.featured,
+            R.id.badgeGamepad, R.id.badgeAudio).mapNotNull { findViewById<View>(it) }
         val target = if (on) 0f else 1f
         for (v in views) {
             if (animate) v.animate().alpha(target).setDuration(300).start()
             else { v.animate().cancel(); v.alpha = target }
         }
-        glass.kick(350)
+        val clock = findViewById<TextView>(R.id.clock)
+        val dateLine = findViewById<View>(R.id.date)?.parent as? View
+        val root = findViewById<View>(R.id.root)
+        if (clock != null && dateLine != null && root != null && root.width > 0 && root.height > 0) {
+            if (on) {
+                val clockScale = 1.75f
+                val dateScale = 1.55f
+                clock.gravity = Gravity.CENTER_HORIZONTAL
+                clock.pivotX = clock.width / 2f
+                clock.pivotY = clock.height / 2f
+                val dateView = findViewById<View>(R.id.date)
+                val weatherView = findViewById<View>(R.id.weather)
+                val visibleDateWidth = if (weatherView != null && weatherView.visibility == View.VISIBLE) {
+                    weatherView.right.toFloat()
+                } else {
+                    (dateView?.right ?: dateLine.width).toFloat()
+                }
+                dateLine.pivotX = visibleDateWidth / 2f
+                dateLine.pivotY = dateLine.height / 2f
+
+                val locC = IntArray(2)
+                val locD = IntArray(2)
+                clock.getLocationInWindow(locC)
+                dateLine.getLocationInWindow(locD)
+
+                val cBaseX = locC[0] - clock.translationX + clock.pivotX
+                val cBaseY = locC[1] - clock.translationY + clock.pivotY
+                val dBaseX = locD[0] - dateLine.translationX + dateLine.pivotX
+                val dBaseY = locD[1] - dateLine.translationY + dateLine.pivotY
+
+                val scaledClockH = clock.height * clockScale
+                val scaledDateH = dateLine.height * dateScale
+                val gap = dp(14).toFloat()
+                val totalH = scaledClockH + gap + scaledDateH
+                val screenCenterX = root.width / 2f
+                val groupTopY = (root.height - totalH) / 2f
+
+                val targetClockCenterY = groupTopY + scaledClockH / 2f
+                val targetDateCenterY = groupTopY + scaledClockH + gap + scaledDateH / 2f
+
+                val cTx = screenCenterX - cBaseX
+                val cTy = targetClockCenterY - cBaseY
+                val dTx = screenCenterX - dBaseX
+                val dTy = targetDateCenterY - dBaseY
+
+                if (animate) {
+                    clock.animate().translationX(cTx).translationY(cTy).scaleX(clockScale).scaleY(clockScale)
+                        .setDuration(420).setInterpolator(DECELERATE).start()
+                    dateLine.animate().translationX(dTx).translationY(dTy).scaleX(dateScale).scaleY(dateScale)
+                        .setDuration(420).setInterpolator(DECELERATE).start()
+                } else {
+                    clock.animate().cancel()
+                    dateLine.animate().cancel()
+                    clock.translationX = cTx; clock.translationY = cTy; clock.scaleX = clockScale; clock.scaleY = clockScale
+                    dateLine.translationX = dTx; dateLine.translationY = dTy; dateLine.scaleX = dateScale; dateLine.scaleY = dateScale
+                }
+            } else {
+                if (animate) {
+                    clock.animate().translationX(0f).translationY(0f).scaleX(1f).scaleY(1f)
+                        .setDuration(320).setInterpolator(DECELERATE).start()
+                    dateLine.animate().translationX(0f).translationY(0f).scaleX(1f).scaleY(1f)
+                        .setDuration(320).setInterpolator(DECELERATE).start()
+                } else {
+                    clock.animate().cancel()
+                    dateLine.animate().cancel()
+                    clock.translationX = 0f; clock.translationY = 0f; clock.scaleX = 1f; clock.scaleY = 1f
+                    dateLine.translationX = 0f; dateLine.translationY = 0f; dateLine.scaleX = 1f; dateLine.scaleY = 1f
+                }
+            }
+        }
+        glass.kick(450)
     }
 
     private val idleCleanRunnable = Runnable {
@@ -3130,6 +3202,12 @@ class MainActivity : Activity() {
                 renderApps()
                 renderSettings(R.string.cw_vertical_position)
             },
+            R.string.yt_drawer_delay to { d ->
+                val cur = prefs.getInt("yt_drawer_delay", 1500).coerceIn(500, 3000)
+                val next = (cur + d * 100).coerceIn(500, 3000)
+                prefs.edit().putInt("yt_drawer_delay", next).apply()
+                renderSettings(R.string.yt_drawer_delay)
+            },
             R.string.glass to { d ->
                 val styles = if (currentWallpaper().startsWith("video:")) GLASS_STYLES - GlassStyle.CLEAR else GLASS_STYLES
                 prefs.edit().putString("glass_style", styles.step(glassStyle().let { if (it in styles) it else GlassStyle.FROSTED }, d)?.key ?: "off").apply()
@@ -3163,6 +3241,7 @@ class MainActivity : Activity() {
             R.string.apps_in_row to Triple(getString(R.string.apps_in_row), if (rowHidden == 0) getString(R.string.all) else getString(R.string.n_of_m, apps.size - rowHidden, apps.size)) { pickRowApps() },
             R.string.categories to Triple(getString(R.string.categories), "${categoriesList().size}") { pickCategoriesSettings() },
             R.string.yt_drawer_channels to Triple(getString(R.string.yt_drawer_channels), getString(R.string.n_on, ytChannelsOn)) { pickYtChannels(forPkg = null, fromAppMenu = false) },
+            R.string.yt_drawer_delay to Triple(getString(R.string.yt_drawer_delay), formatDrawerDelay(prefs.getInt("yt_drawer_delay", 1500).coerceIn(500, 3000))) { pickYtChannels(forPkg = null, fromAppMenu = false, focus = -1) },
             R.string.inputs_bar to Triple(getString(R.string.inputs_bar), "${TopInputManager.loadInputs(prefs, hdmiInputs().map { it.pkg to it.label }).count { !it.hidden }}") { pickInputsSettings() },
             R.string.row_position to Triple(getString(R.string.row_position), getString(ROW_ALIGN[rowAlign()]!!.first)) {
                 steps[R.string.row_position]!!(1)
@@ -3288,7 +3367,7 @@ class MainActivity : Activity() {
             Triple(R.string.section_style, "${rows[R.string.theme]!!.second} · ${getString(glassName())}",
                 listOf(R.string.theme, R.string.glass, R.string.app_animations, R.string.tile_radius, R.string.glow_style, R.string.focus_dimming)),
             Triple(R.string.section_app_row, "${rows[R.string.apps_in_row]!!.second} · ${rows[R.string.row_position]!!.second}",
-                listOf(R.string.edit_apps_row, R.string.apps_in_row, R.string.categories, R.string.yt_drawer_channels, R.string.sort_apps, R.string.icon_style, R.string.row_size, R.string.row_spacing, R.string.app_names, R.string.row_position)),
+                listOf(R.string.edit_apps_row, R.string.apps_in_row, R.string.categories, R.string.yt_drawer_channels, R.string.yt_drawer_delay, R.string.sort_apps, R.string.icon_style, R.string.row_size, R.string.row_spacing, R.string.app_names, R.string.row_position)),
             // "When hidden" only means something once the row can hide.
             Triple(R.string.bottom_row, "${rowName()} · ${rows[R.string.show_row]!!.second}", listOfNotNull(R.string.show_row, R.string.apps_when_hidden.takeIf { rowShow() != "always" },
                 R.string.cw_vertical_position, R.string.row_name, R.string.show_icons, R.string.cw_apps, R.string.cw_channels, R.string.restore_hidden)),
@@ -4623,7 +4702,7 @@ class MainActivity : Activity() {
                                 }
                             }
                             pendingYtDrawerShow = task
-                            ui.postDelayed(task, 1500L)
+                            ui.postDelayed(task, ytDrawerDelayMs())
                         }
                     } else {
                         pendingYtDrawerShow?.let { ui.removeCallbacks(it) }
@@ -7029,6 +7108,75 @@ class MainActivity : Activity() {
         return result
     }
 
+    private fun ytDrawerDelayMs(): Long = prefs.getInt("yt_drawer_delay", 1500).coerceIn(500, 3000).toLong()
+
+    private fun formatDrawerDelay(ms: Int): String =
+        String.format(java.util.Locale.US, "%.1f s", ms.coerceIn(500, 3000) / 1000f)
+
+    private fun buildDrawerDelayGauge(): View {
+        var curMs = prefs.getInt("yt_drawer_delay", 1500).coerceIn(500, 3000)
+        val titleView = label(getString(R.string.yt_drawer_delay), 15f).apply {
+            setTextColor(restInk())
+            panelShadow()
+        }
+        val valueView = label("‹ ${formatDrawerDelay(curMs)} ›", 15f).apply {
+            setTextColor(valueInk())
+            panelShadow()
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(titleView, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(valueView, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        }
+        val minLabel = label("0.5 s", 11f).apply { setTextColor(valueInk()); panelShadow() }
+        val maxLabel = label("3.0 s", 11f).apply { setTextColor(valueInk()); panelShadow() }
+        val pb = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 2500
+            progress = curMs - 500
+            progressDrawable = progressBarDrawable(focusInk())
+        }
+        val gaugeLine = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, dp(2))
+            addView(minLabel, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginEnd = dp(10) })
+            addView(pb, LinearLayout.LayoutParams(0, dp(6), 1f))
+            addView(maxLabel, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(10) })
+        }
+        return LinearLayout(this).apply {
+            id = View.generateViewId()
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(12))
+            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                bottomMargin = dp(8)
+            }
+            addView(header)
+            addView(gaugeLine)
+            val stepFn: (Int) -> Unit = { d ->
+                curMs = (curMs + d * 100).coerceIn(500, 3000)
+                prefs.edit().putInt("yt_drawer_delay", curMs).apply()
+                pb.progress = curMs - 500
+                valueView.text = "‹ ${formatDrawerDelay(curMs)} ›"
+            }
+            tag = stepFn
+            setOnClickListener {
+                // Cycle by +0.5 s on OK click (wrapping from 3.0s back to 0.5s)
+                val next = if (curMs >= 3000) 500 else (curMs + 500).coerceAtMost(3000)
+                curMs = next
+                prefs.edit().putInt("yt_drawer_delay", curMs).apply()
+                pb.progress = curMs - 500
+                valueView.text = "‹ ${formatDrawerDelay(curMs)} ›"
+            }
+            panelFocus(this, 12, getString(R.string.help_yt_drawer_delay), AREA_APPS) { focused ->
+                titleView.setTextColor(if (focused) focusInk() else restInk())
+                valueView.setTextColor(valueInk(focused))
+                minLabel.setTextColor(valueInk(focused))
+                maxLabel.setTextColor(valueInk(focused))
+            }
+        }
+    }
+
     private fun pickYtChannels(forPkg: String? = null, fromAppMenu: Boolean = false, focus: Int = 0) {
         val hidden = prefs.getStringSet("hidden_watch", emptySet()) ?: emptySet()
         val allChannels = appChannels().distinctBy { (_, p, n) -> channelKey(p, n) }
@@ -7111,8 +7259,18 @@ class MainActivity : Activity() {
                 pickYtChannels(forPkg, fromAppMenu, i)
             }
         }
-        showPage(pageTitle, rows, focus = focus, crumb = if (fromAppMenu) null else getString(R.string.section_app_row)) {
+        val gaugeView = buildDrawerDelayGauge()
+        showPage(pageTitle, rows, focus = focus.coerceAtLeast(0), top = gaugeView, crumb = if (fromAppMenu) null else getString(R.string.section_app_row)) {
             if (fromAppMenu) closeLauncherSettings() else renderSettings(R.string.yt_drawer_channels)
+        }
+        if (settingsList.childCount >= 2) {
+            val firstRow = settingsList.getChildAt(1)
+            val lastRow = settingsList.getChildAt(settingsList.childCount - 1)
+            gaugeView.nextFocusDownId = firstRow.id
+            gaugeView.nextFocusUpId = lastRow.id
+            firstRow.nextFocusUpId = gaugeView.id
+            lastRow.nextFocusDownId = gaugeView.id
+            if (focus < 0) gaugeView.requestFocus()
         }
     }
 
@@ -7937,7 +8095,7 @@ class MainActivity : Activity() {
         val ROW_ICONS = mapOf(
             R.string.theme to R.drawable.ms_contrast, R.string.glass to R.drawable.ms_blur_on, R.string.app_animations to R.drawable.ms_open_in_full,
             R.string.edit_apps_row to R.drawable.ms_swap_horiz, R.string.apps_in_row to R.drawable.ms_checklist, R.string.sort_apps to R.drawable.ms_sort,
-            R.string.categories to R.drawable.ms_view_carousel, R.string.yt_drawer_channels to R.drawable.ms_video_library, R.string.inputs_bar to R.drawable.ic_hdmi,
+            R.string.categories to R.drawable.ms_view_carousel, R.string.yt_drawer_channels to R.drawable.ms_video_library, R.string.yt_drawer_delay to R.drawable.ms_timer, R.string.inputs_bar to R.drawable.ic_hdmi,
             R.string.icon_style to R.drawable.ms_apps, R.string.row_size to R.drawable.ms_format_size, R.string.row_spacing to R.drawable.ic_row_spacing, R.string.tile_radius to R.drawable.ms_apps, R.string.glow_style to R.drawable.ms_palette, R.string.focus_dimming to R.drawable.ms_visibility, R.string.app_names to R.drawable.ms_label,
             R.string.row_position to R.drawable.ms_format_align_left,
             R.string.show_row to R.drawable.ms_visibility, R.string.apps_when_hidden to R.drawable.ms_vertical_align_bottom, R.string.row_name to R.drawable.ms_edit,
@@ -7968,7 +8126,7 @@ class MainActivity : Activity() {
             R.string.section_lock to R.string.help_lock,
             R.string.weather_location to R.string.help_location,
             R.string.edit_apps_row to R.string.help_rearrange, R.string.apps_in_row to R.string.help_choose_apps,
-            R.string.categories to R.string.categories, R.string.yt_drawer_channels to R.string.help_yt_drawer_channels, R.string.inputs_bar to R.string.inputs_in_bar,
+            R.string.categories to R.string.categories, R.string.yt_drawer_channels to R.string.help_yt_drawer_channels, R.string.yt_drawer_delay to R.string.help_yt_drawer_delay, R.string.inputs_bar to R.string.inputs_in_bar,
             R.string.sort_apps to R.string.help_order, R.string.icon_style to R.string.help_icon_style, R.string.row_size to R.string.help_row_size, R.string.row_spacing to R.string.help_row_spacing,
             R.string.tile_radius to R.string.help_tile_radius, R.string.glow_style to R.string.help_glow_style, R.string.focus_dimming to R.string.help_focus_dimming,
             R.string.apps_when_hidden to R.string.help_apps_when_hidden, R.string.row_name to R.string.help_row_name,

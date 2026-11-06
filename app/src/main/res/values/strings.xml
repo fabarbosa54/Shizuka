@@ -512,4 +512,6 @@
     <string name="yt_drawer_channels">App drawer channels</string>
     <string name="help_yt_drawer_channels">Choose which Continue Watching feeds and channels appear in the expandable app drawers.</string>
     <string name="yt_drawer_feed">Drawer feed</string>
+    <string name="yt_drawer_delay">Drawer delay</string>
+    <string name="help_yt_drawer_delay">How long to stay on an app icon before its video drawer opens (0.5 s to 3.0 s).</string>
 </resources>
