@@ -1410,9 +1410,9 @@ class MainActivity : Activity() {
             }
         }
         val names = appNameRows.flatMap { row -> (0 until row.childCount).mapNotNull { row.getChildAt(it) as? TextView } }
-        val apps = listOf(findViewById<TextView>(R.id.appsTitle)) + names + categoryTitleViews
+        val apps = listOfNotNull(findViewById<TextView>(R.id.appsTitle)) + names + categoryTitleViews
         // Measured over the whole row container, so the On focus name keeps one colour as it moves from tile to tile.
-        val scrollersToInk = if (appScrollers.isNotEmpty()) appScrollers else listOf(findViewById<View>(R.id.appScroll))
+        val scrollersToInk = if (appScrollers.isNotEmpty()) appScrollers else listOfNotNull(findViewById<View>(R.id.appScroll))
         appsInk = inkBehind(apps + scrollersToInk)
         for (v in apps) {
             ink(v, appsInk, fade = true)
@@ -1421,7 +1421,7 @@ class MainActivity : Activity() {
             }
         }
         for (lbl in appRowLabels) ink(lbl, appsInk, fade = true, strong = true)
-        if (appRowLabels.isEmpty()) ink(findViewById(R.id.rowLabel), appsInk, fade = true, strong = true)
+        if (appRowLabels.isEmpty()) findViewById<TextView>(R.id.rowLabel)?.let { ink(it, appsInk, fade = true, strong = true) }
         for (row in appRows) {
             val gear = row.getChildAt(0) as? ImageView
             if (gear?.tag?.toString()?.startsWith("category_gear:") == true) {
@@ -7003,6 +7003,16 @@ class MainActivity : Activity() {
         return pkg in publishingPkgs || streamKeywords.any { pkg.contains(it, ignoreCase = true) }
     }
 
+    private fun isOqee(pkg: String?): Boolean {
+        if (pkg == null) return false
+        return pkg.contains("oqee", ignoreCase = true) || pkg.contains("freetv", ignoreCase = true)
+    }
+
+    private fun isRtpPlay(pkg: String?): Boolean {
+        if (pkg == null) return false
+        return pkg == "pt.rtp.play" || pkg.contains("rtp.play", ignoreCase = true)
+    }
+
     private fun defaultYtChannelOn(pkg: String, name: String): Boolean {
         if (name == WATCH_NEXT) return !isYoutubeOrSmartTube(pkg)
         val n = name.lowercase()
@@ -7015,6 +7025,20 @@ class MainActivity : Activity() {
                 "recommend" in cn || "recommand" in cn || "accueil" in cn || "home" in cn || "subscri" in cn || "abonn" in cn
             }
             return !anyMatches && pkgChs.firstOrNull()?.third == name
+        }
+        if (isOqee(pkg)) {
+            val isVodOrCine = "ciné" in n || "cine" in n || "vod" in n || "film" in n || "série" in n || "serie" in n || "replay" in n
+            if (isVodOrCine) return false
+            val isRecentOrLive = "reprendre" in n || "récent" in n || "recent" in n || "derni" in n ||
+                "historique" in n || "en cours" in n || "continue" in n || "suivre" in n ||
+                "favori" in n || "chaîne" in n || "chaine" in n || "direct" in n || "live" in n ||
+                "oqee" in n || "free" in n
+            if (isRecentOrLive) return true
+            val pkgChs = appChannels().filter { it.second == pkg }
+            return pkgChs.firstOrNull()?.third == name
+        }
+        if (isRtpPlay(pkg)) {
+            return true
         }
         return "continue" in n || "reprendre" in n || "lecture" in n || "on deck" in n || "en cours" in n ||
             "next" in n || "suivre" in n || "watchlist" in n || "liste" in n
@@ -7462,7 +7486,8 @@ class MainActivity : Activity() {
     private fun watchSources(): List<App> {
         val streamKeywords = listOf(
             "video", "tv", "stream", "media", "netflix", "youtube", "disney", "prime", "plex",
-            "kodi", "jellyfin", "vlc", "canal", "molotov", "max", "paramount", "arte", "hbo", "crunchyroll"
+            "kodi", "jellyfin", "vlc", "canal", "molotov", "max", "paramount", "arte", "hbo",
+            "crunchyroll", "adn", "shadowz", "rtp", "oqee", "free"
         )
         return apps.filter { a ->
             a.pkg in publishingPkgs ||
@@ -7576,7 +7601,8 @@ class MainActivity : Activity() {
                 val progress = if (duration > 0 && position >= 1000) (position * 100 / duration).toInt().coerceIn(0, 100) else 0
                 val pkg = str("package_name")
                 val wide = ShowsWall.wide(str("thumbnail_uri") != null, num("poster_art_aspect_ratio").toInt())
-                val prog = Prog(title, sub, progress, str("thumbnail_uri") ?: str("poster_art_uri"), str("intent_uri"), pkg, group ?: pkg, wide)
+                val imgUri = str("thumbnail_uri") ?: str("poster_art_uri") ?: str("logo_uri")
+                val prog = Prog(title, sub, progress, imgUri, str("intent_uri"), pkg, group ?: pkg, wide)
                 val engaged = num("last_engagement_time_utc_millis")
                 out += Triple(num("weight"),
                     if (group == null) watchSortKey(num("watch_next_type"), engaged) else channelSortKey(engaged, prefs.getLong("t_$pkg", 0)), prog)
