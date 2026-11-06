@@ -19,6 +19,9 @@
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.READ_LOGS"
+        tools:ignore="ProtectedPermissions" />
 
     <uses-feature android:name="android.software.leanback" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -38,6 +41,8 @@
         <!-- The TV provider (Watch Next, app channels). Stock Android TV makes it visible to all apps;
              some makers' builds (Philips) don't, and then every query comes back null. -->
         <provider android:authorities="android.media.tv" />
+        <provider android:authorities="net.oqee.androidtv.store.provider" />
+        <package android:name="net.oqee.androidtv.store" />
     </queries>
 
     <application

@@ -7082,6 +7082,182 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun formatOqeeImg(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        return url.replace("%d", "480").replace("%s", "480")
+    }
+
+    private fun readOqeeFeed(hidden: Set<String>): List<Prog> {
+        val pkg = "net.oqee.androidtv.store"
+        val items = mutableListOf<Prog>()
+        val recentMap = LinkedHashMap<String, Prog>() // channelId -> Prog (insertion order from oldest to newest)
+
+        // Load previously persisted recent OQEE channels
+        val savedJson = prefs.getString("oqee_recent_channels", null)
+        if (!savedJson.isNullOrEmpty()) {
+            try {
+                val arr = org.json.JSONArray(savedJson)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val chId = obj.optString("id")
+                    val name = obj.optString("name")
+                    val sub = obj.optString("sub")
+                    val img = obj.optString("img")
+                    val intentUri = obj.optString("intent")
+                    if (chId.isNotEmpty() && name.isNotEmpty() && img.isNotEmpty()) {
+                        recentMap[chId] = Prog(name, sub, 0, img, intentUri, pkg, pkg, true)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Seed initial channel from your just-watched RMC Story (channel 23, id 846) if empty
+        if (recentMap.isEmpty()) {
+            val seedId = "846"
+            recentMap[seedId] = Prog(
+                "23 · RMC Story",
+                "En direct",
+                0,
+                "https://img1.oqee.net/pictures/4483914/wide_specific/h480",
+                "https://oq.ee/channel/846/play",
+                pkg,
+                pkg,
+                true
+            )
+        }
+        try {
+            val proc = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "2500"))
+            val channelMeta = HashMap<String, Pair<String, String>>() // channelId -> (name, img)
+            val channelProgTitle = HashMap<String, String>() // channelId -> current program title
+            val watchedChannelIds = mutableListOf<String>()
+            var lastClickedName: String? = null
+            var lastClickedTitle: String? = null
+            var lastClickedBg: String? = null
+
+            proc.inputStream.bufferedReader().useLines { lines ->
+                val idRegex = Regex("""ChannelData\(id=(\d+),.*?name=([^,]+),.*?iconLight=([^,\s]+)""")
+                val placeholderRegex = Regex("""placeholder=ContentPictures\(main=([^,\s)]+)""")
+                val progRegex = Regex("""ProgramData\(.*?title=([^,]+),\s*channelId=(\d+).*?previewImg=([^,\s)]+)""")
+                val clickRegex = Regex("""On live item click LiveData\(channelId=(\d+),\s*channelNumber=(\d+),\s*channelName=([^,]+),.*?backgroundUrl=([^,\s]+),\s*title=([^,]+)""")
+                val stayRegex = Regex("""launchPlayback: Current channel id=(\d+)""")
+
+                for (line in lines) {
+                    if ("ProgramData(" in line && "HomePresenter" in line) {
+                        val m = progRegex.find(line)
+                        if (m != null) {
+                            val pTitle = m.groupValues[1].trim()
+                            val chId = m.groupValues[2].trim()
+                            val pImg = formatOqeeImg(m.groupValues[3].trim())
+                            channelProgTitle[chId] = pTitle
+                            if (pImg != null && chId !in channelMeta) {
+                                channelMeta[chId] = ("Chaîne $chId" to pImg)
+                            }
+                        }
+                    } else if ("On live item click LiveData(" in line) {
+                        val m = clickRegex.find(line)
+                        if (m != null) {
+                            val chId = m.groupValues[1].trim()
+                            val chNum = m.groupValues[2].trim()
+                            val chName = m.groupValues[3].trim()
+                            val bgUrl = formatOqeeImg(m.groupValues[4].trim())
+                            val pTitle = m.groupValues[5].trim().takeIf { it != "null" } ?: ""
+                            lastClickedName = "$chNum · $chName"
+                            lastClickedTitle = pTitle
+                            lastClickedBg = bgUrl
+                            if (bgUrl != null) {
+                                channelMeta[chId] = (lastClickedName!! to bgUrl)
+                            }
+                            if (pTitle.isNotEmpty()) channelProgTitle[chId] = pTitle
+                            watchedChannelIds.remove(chId)
+                            watchedChannelIds.add(chId)
+                        }
+                    } else if ("getLivePlayerSourceUrl: channelData = ChannelData(" in line) {
+                        val m = idRegex.find(line)
+                        if (m != null) {
+                            val chId = m.groupValues[1].trim()
+                            val chName = m.groupValues[2].trim()
+                            val iconUrl = formatOqeeImg(m.groupValues[3].trim())
+                            val mainImg = placeholderRegex.find(line)?.groupValues?.get(1)?.let { formatOqeeImg(it.trim()) }
+                            val bestImg = lastClickedBg ?: mainImg ?: iconUrl
+                            val displayTitle = if (lastClickedName?.endsWith(chName) == true) lastClickedName!! else chName
+                            if (bestImg != null) {
+                                channelMeta[chId] = (displayTitle to bestImg)
+                            }
+                            lastClickedBg = null
+                            lastClickedName = null
+                            // Only record as watched if PlayerActivity was active or launchPlayback isn't the only trigger
+                            watchedChannelIds.remove(chId)
+                            watchedChannelIds.add(chId)
+                        }
+                    } else if ("launchPlayback: Current channel id=" in line) {
+                        // Home screen background preview: don't overwrite watched order unless nothing watched yet
+                        val m = stayRegex.find(line)
+                        if (m != null && watchedChannelIds.isEmpty()) {
+                            watchedChannelIds.add(m.groupValues[1].trim())
+                        }
+                    }
+                }
+            }
+
+            for (chId in watchedChannelIds) {
+                val meta = channelMeta[chId] ?: continue
+                val pSub = channelProgTitle[chId] ?: ""
+                val intentUri = "https://oq.ee/channel/$chId/play"
+                recentMap.remove(chId)
+                recentMap[chId] = Prog(meta.first, pSub, 0, meta.second, intentUri, pkg, pkg, true)
+            }
+
+            if (watchedChannelIds.isNotEmpty()) {
+                val arr = org.json.JSONArray()
+                for ((id, pr) in recentMap.entries.toList().takeLast(12)) {
+                    val obj = org.json.JSONObject()
+                    obj.put("id", id)
+                    obj.put("name", pr.title)
+                    obj.put("sub", pr.sub)
+                    obj.put("img", pr.image ?: "")
+                    obj.put("intent", pr.intent ?: "")
+                    arr.put(obj)
+                }
+                prefs.edit().putString("oqee_recent_channels", arr.toString()).apply()
+            }
+        } catch (_: Exception) {}
+
+        // Add most recent channels first (reversed insertion order)
+        for (pr in recentMap.values.toList().asReversed()) {
+            if (hideKey(pkg, pr.title) !in hidden) {
+                items.add(pr)
+            }
+        }
+
+        // Also query OqeeContentProvider (resumeWithProfile: replays / recordings / VOD in progress)
+        try {
+            contentResolver.query(Uri.parse("content://net.oqee.androidtv.store.provider/resumeWithProfile"), null, null, null, null)?.use { c ->
+                val idxType = c.getColumnIndex("program_type")
+                val idxTitle = c.getColumnIndex("program_title")
+                val idxSub = c.getColumnIndex("program_subtitle")
+                val idxImg = c.getColumnIndex("program_image_url")
+                val idxLogo = c.getColumnIndex("program_channel_logo_url")
+                val idxProg = c.getColumnIndex("program_progress_percent")
+                val idxIntent = c.getColumnIndex("intent")
+                while (c.moveToNext()) {
+                    val pType = if (idxType >= 0 && !c.isNull(idxType)) c.getString(idxType) else null
+                    if (pType == "profile") continue
+                    val title = if (idxTitle >= 0 && !c.isNull(idxTitle)) c.getString(idxTitle) else continue
+                    if (hideKey(pkg, title) in hidden) continue
+                    val sub = if (idxSub >= 0 && !c.isNull(idxSub)) c.getString(idxSub).orEmpty() else ""
+                    val rawImg = (if (idxImg >= 0 && !c.isNull(idxImg)) c.getString(idxImg) else null)
+                        ?: (if (idxLogo >= 0 && !c.isNull(idxLogo)) c.getString(idxLogo) else null)
+                    val img = formatOqeeImg(rawImg) ?: continue
+                    val progress = if (idxProg >= 0 && !c.isNull(idxProg)) c.getInt(idxProg).coerceIn(0, 100) else 0
+                    val intentUri = if (idxIntent >= 0 && !c.isNull(idxIntent)) c.getString(idxIntent) else null
+                    items.add(Prog(title, sub, progress, img, intentUri, pkg, pkg, true))
+                }
+            }
+        } catch (_: Exception) {}
+
+        return items.distinctBy { it.intent ?: it.title }.take(12)
+    }
+
     private fun queryYoutubeFeed(): List<Prog> {
         val hidden = prefs.getStringSet("hidden_watch", emptySet()) ?: emptySet()
         val offSet = prefs.getStringSet("yt_ch_off", emptySet()) ?: emptySet()
@@ -7092,7 +7268,9 @@ class MainActivity : Activity() {
         } catch (_: Exception) {
             emptyList()
         }
-        val watchNextByPkg = watchNextProgs
+        val oqeeProgs = readOqeeFeed(hidden)
+        val combinedWatchNext = watchNextProgs + oqeeProgs
+        val watchNextByPkg = combinedWatchNext
             .filter { !it.pkg.isNullOrEmpty() && !it.image.isNullOrEmpty() }
             .groupBy { it.pkg!! }
 
@@ -7205,8 +7383,7 @@ class MainActivity : Activity() {
         val hidden = prefs.getStringSet("hidden_watch", emptySet()) ?: emptySet()
         val allChannels = appChannels().distinctBy { (_, p, n) -> channelKey(p, n) }
         val watchNextCounts = try {
-            readPrograms(TvContract.WatchNextPrograms.CONTENT_URI, hidden)
-                .map { it.second }
+            (readPrograms(TvContract.WatchNextPrograms.CONTENT_URI, hidden).map { it.second } + readOqeeFeed(hidden))
                 .filter { !it.pkg.isNullOrEmpty() && !it.image.isNullOrEmpty() }
                 .groupingBy { it.pkg!! }
                 .eachCount()
@@ -7907,7 +8084,11 @@ class MainActivity : Activity() {
         prefs.edit().putLong("t_${p.pkg}", System.currentTimeMillis()).apply()
         val from = currentFocus?.takeIf { it.getTag(R.id.watchRow) is Prog }
         try {
-            startApp(Intent.parseUri(p.intent, Intent.URI_INTENT_SCHEME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), from)
+            val intent = Intent.parseUri(p.intent, Intent.URI_INTENT_SCHEME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (!p.pkg.isNullOrEmpty() && intent.`package` == null && intent.component == null) {
+                intent.setPackage(p.pkg)
+            }
+            startApp(intent, from)
         } catch (e: Exception) {
             p.pkg?.let { packageManager.getLeanbackLaunchIntentForPackage(it) }?.let { startApp(it, from) }
         }
