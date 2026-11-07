@@ -6917,9 +6917,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun refreshWeather() {
+    private fun refreshWeather(force: Boolean = false) {
         if (prefs.getString("weather", "off") == "off") return
-        if (System.currentTimeMillis() - prefs.getLong("wx_time", 0) < 25 * 60_000L) return
+        if (!force && System.currentTimeMillis() - prefs.getLong("wx_time", 0) < 25 * 60_000L && prefs.contains("wx_daily")) return
         io.execute {
             try {
                 if (!manualCity() && System.currentTimeMillis() - prefs.getLong("geo_time", 0) > 6 * 3600_000L) {
@@ -7098,6 +7098,8 @@ class MainActivity : Activity() {
         val root = findViewById<FrameLayout>(R.id.root) ?: return
         val unit = prefs.getString("weather", "off")
         if (unit == "off" || !prefs.contains("wx_temp")) return
+
+        if (!prefs.contains("wx_daily")) refreshWeather(force = true)
 
         val c = prefs.getFloat("wx_temp", 0f)
         val temp = Math.round(if (unit == "f") c * 9 / 5 + 32 else c)
