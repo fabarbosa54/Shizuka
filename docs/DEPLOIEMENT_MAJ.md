@@ -93,11 +93,11 @@ git push origin v1.1.1
 
 ## 🤖 Que se passe-t-il ensuite ?
 
-1. Rendez-vous sur votre dépôt : **https://github.com/fabarbosa54/Shizuka/actions**
+1. Rendez-vous sur votre dépôt : **https://github.com/riciofab/Shizuka/actions**
 2. Vous verrez le workflow **Release** s'exécuter.
 3. En ~1 à 2 minutes, il compile le projet et génère le fichier `Shizuka.apk`.
 4. Dès la fin du build, la mise à jour est immédiatement disponible dans la section **Releases** :
-   👉 **https://github.com/fabarbosa54/Shizuka/releases**
+   👉 **https://github.com/riciofab/Shizuka/releases**
 
 ---
 
@@ -114,3 +114,4 @@ git tag -d v1.1.1
 git push origin --delete v1.1.1
 ```
 Vous pouvez ensuite supprimer la Release correspondante directement sur l'interface GitHub si elle a été générée.
+

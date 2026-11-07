@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-blue">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.2.0-blue">
   <img alt="Android 8.0+" src="https://img.shields.io/badge/Android-8.0%2B-3ddc84">
   <img alt="APK size" src="https://img.shields.io/badge/APK-~0.4%20MB-blue">
-  <a href="LICENSE"><img alt="GPL-3.0 License" src="https://img.shields.io/github/license/fabarbosa54/Shizuka"></a>
-  <a href="https://github.com/fabarbosa54/Shizuka"><img alt="GitHub Repo" src="https://img.shields.io/badge/GitHub-fabarbosa54%2FShizuka-181717?logo=github"></a>
+  <a href="LICENSE"><img alt="GPL-3.0 License" src="https://img.shields.io/github/license/riciofab/Shizuka"></a>
+  <a href="https://github.com/riciofab/Shizuka"><img alt="GitHub Repo" src="https://img.shields.io/badge/GitHub-riciofab%2FShizuka-181717?logo=github"></a>
 </p>
 
 ---
@@ -112,7 +112,7 @@ Personnalisez le contour lumineux autour des tuiles sélectionnées avec un aper
 
 Compatible avec **Android TV** et **Google TV** (Android 8.0 et supérieur).
 
-1. Téléchargez l'APK depuis la page [Releases](https://github.com/fabarbosa54/Shizuka/releases).
+1. Téléchargez l'APK depuis la page [Releases](https://github.com/riciofab/Shizuka/releases).
 2. Transférez-le sur votre téléviseur (via clé USB, application **Downloader**, ou `adb`) :
    ```sh
    adb install -r Shizuka.apk
@@ -124,7 +124,7 @@ Compatible avec **Android TV** et **Google TV** (Android 8.0 et supérieur).
 ## 🛠️ Compilation depuis les sources
 
 ```sh
-git clone https://github.com/fabarbosa54/Shizuka.git
+git clone https://github.com/riciofab/Shizuka.git
 cd Shizuka
 ./gradlew assembleDebug
 ```

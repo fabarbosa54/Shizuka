@@ -8816,7 +8816,7 @@ class MainActivity : Activity() {
             60 to R.string.every_60, 1440 to R.string.every_1440,
         )
         const val CHOSEN = "✓"
-        const val REPO = "fabarbosa54/Shizuka"
+        const val REPO = "riciofab/Shizuka"
         const val UPDATE_STATUS = "dev.plume.UPDATE_STATUS"
         const val WRITE_EPG ="com.android.providers.tv.permission.WRITE_EPG_DATA"
         const val TV_SETTINGS = "com.android.tv.settings"
