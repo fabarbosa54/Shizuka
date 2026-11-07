@@ -7053,9 +7053,8 @@ class MainActivity : Activity() {
         val c = prefs.getFloat("wx_temp", 0f)
         val temp = Math.round(if (unit == "f") c * 9 / 5 + 32 else c)
         val code = prefs.getInt("wx_code", 0)
-        val city = prefs.getString("geo_city", "").orEmpty()
         val word = weatherWord(code)
-        view.text = if (city.isNotEmpty() && word.isNotEmpty()) "$temp° · $city · $word" else if (word.isNotEmpty()) "$temp° · $word" else "$temp°"
+        view.text = if (word.isNotEmpty()) "$temp° · $word" else "$temp°"
         view.contentDescription = "$temp° ${weatherWord(code)}"
         val icon = getDrawable(weatherIcon(code, prefs.getBoolean("wx_day", true)))!!.mutate().apply { setBounds(0, 0, dp(18), dp(18)) }
         view.setCompoundDrawablesRelative(icon, null, null, null)
