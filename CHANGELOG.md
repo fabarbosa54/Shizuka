@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+- **Widget Météo interactif étendu.** Sélectionnez la pastille météo sous l'horloge pour ouvrir une carte en verre dépoli affichant la ville, la température, les min/max du jour, l'humidité, le vent et les prévisions des 3 prochains jours.
+- **Panneau de paramètres flottant façon tvOS.** Le menu des réglages s'affiche désormais comme une carte de verre flottante aux 4 coins arrondis avec des animations d'ouverture et de fermeture fluides.
+- **Nouveaux fonds d'écran 4K.** Ajout d'une collection de fonds d'écran de Noël téléchargeables directement depuis le dépôt Shizuka.
+- **Navigation et affichage améliorés.** Navigation verticale séquentielle entre la barre supérieure, la météo et les lignes d'applications, correction du détourage de la première tuile à gauche et fiabilisation du chargement des vignettes des tiroirs.
+
 ## 1.1.0
 
 - **Tiroirs de flux dynamiques par application.** Sélectionnez une application vidéo (YouTube, SmartTube, Netflix, Prime Video, Disney+, Crunchyroll, ADN, Shadowz, RTP Play, OQEE by Free) pour déployer ses flux et reprises de lecture avec une animation en cascade fluide.
