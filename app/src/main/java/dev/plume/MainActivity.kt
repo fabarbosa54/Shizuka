@@ -5322,48 +5322,21 @@ class MainActivity : Activity() {
         val inputsContainer = findViewById<LinearLayout>(R.id.inputsBar)
 
         val weatherV = findViewById<View>(R.id.weather)?.takeIf { it.visibility == View.VISIBLE && it.isFocusable }
-
-        fun screenCenterX(view: View): Int {
-            val loc = IntArray(2)
-            view.getLocationOnScreen(loc)
-            return loc[0] + view.width / 2
-        }
-        fun topBarTargetFor(from: View): View {
-            val candidates = ArrayList<View>()
-            if (weatherV != null) candidates.add(weatherV)
-            if (inputsContainer != null) {
-                for (i in 0 until inputsContainer.childCount) {
-                    val child = inputsContainer.getChildAt(i)
-                    if (child != null && child.visibility == View.VISIBLE && child.isFocusable) candidates.add(child)
-                }
-            }
-            if (top.visibility == View.VISIBLE) candidates.add(top)
-            if (candidates.isEmpty()) return top
-            val fromX = screenCenterX(from)
-            return candidates.minByOrNull { kotlin.math.abs(screenCenterX(it) - fromX) } ?: top
+        val topRowTarget: View = if (inputsContainer != null && inputsContainer.childCount > 0) {
+            inputsContainer.getChildAt(0)
+        } else {
+            top
         }
 
         return when {
             v === weatherV -> when (key) {
+                KeyEvent.KEYCODE_DPAD_UP -> topRowTarget
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                     val target = apps ?: cards ?: v
                     scrollToView(target)
                     target
                 }
-                KeyEvent.KEYCODE_DPAD_UP -> v
-                KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    if (!topBarExpanded) findViewById(R.id.topMenuToggle)
-                    else shownTop().mapNotNull { findViewById<View>(it) }.lastOrNull { it.visibility == View.VISIBLE } ?: v
-                }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    if (inputsContainer != null && inputsContainer.childCount > 0) {
-                        inputsContainer.getChildAt(0)
-                    } else if (!topBarExpanded) {
-                        findViewById(R.id.topMenuToggle)
-                    } else {
-                        shownTop().mapNotNull { findViewById<View>(it) }.firstOrNull { it.visibility == View.VISIBLE } ?: v
-                    }
-                }
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> v
                 else -> null
             }
             v.parent === inputsContainer -> {
@@ -5371,12 +5344,16 @@ class MainActivity : Activity() {
                 val totalInputs = inputsContainer?.childCount ?: 0
                 when (key) {
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        val target = apps ?: cards ?: v
-                        scrollToView(target)
-                        target
+                        if (weatherV != null) {
+                            weatherV
+                        } else {
+                            val target = apps ?: cards ?: v
+                            scrollToView(target)
+                            target
+                        }
                     }
                     KeyEvent.KEYCODE_DPAD_UP -> v
-                    KeyEvent.KEYCODE_DPAD_LEFT -> if (inputIdx == 0) weatherV ?: v else null
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (inputIdx == 0) v else null
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         if (inputIdx < totalInputs - 1) null
                         else if (!topBarExpanded) findViewById(R.id.topMenuToggle)
@@ -5387,19 +5364,23 @@ class MainActivity : Activity() {
             }
             v.parent === wifi.parent -> when (key) { // top bar system icons
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    val target = apps ?: cards ?: v
-                    scrollToView(target)
-                    target
+                    if (weatherV != null) {
+                        weatherV
+                    } else {
+                        val target = apps ?: cards ?: v
+                        scrollToView(target)
+                        target
+                    }
                 }
                 KeyEvent.KEYCODE_DPAD_UP -> v
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
                     if (v.id == R.id.topMenuToggle || v.id == shownTop().first()) {
                         if (inputsContainer != null && inputsContainer.childCount > 0) {
                             inputsContainer.getChildAt(inputsContainer.childCount - 1)
-                        } else weatherV ?: v
+                        } else v
                     } else null
                 }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> if (v.id == R.id.topMenuToggle || v.id == shownTop().last()) weatherV ?: v else null
+                KeyEvent.KEYCODE_DPAD_RIGHT -> if (v.id == R.id.topMenuToggle || v.id == shownTop().last()) v else null
                 else -> null
             }
             currentRow != null -> {
@@ -5413,7 +5394,7 @@ class MainActivity : Activity() {
                         if (rowIdxInGroup > 0) {
                             val prevRow = currentList[rowIdxInGroup - 1]
                             val targetChildIdx = if (childIdx == 0) 1 else childIdx.coerceIn(1, (prevRow.childCount - 1).coerceAtLeast(0))
-                            val target = prevRow.getChildAt(targetChildIdx) ?: topBarTargetFor(v)
+                            val target = prevRow.getChildAt(targetChildIdx) ?: (weatherV ?: topRowTarget)
                             scrollToView(target)
                             target
                         } else if (isBelow) {
@@ -5423,18 +5404,18 @@ class MainActivity : Activity() {
                             } else if (appRowsAbove.isNotEmpty()) {
                                 val prevRow = appRowsAbove.last()
                                 val targetChildIdx = if (childIdx == 0) 1 else childIdx.coerceIn(1, (prevRow.childCount - 1).coerceAtLeast(0))
-                                val target = prevRow.getChildAt(targetChildIdx) ?: topBarTargetFor(v)
+                                val target = prevRow.getChildAt(targetChildIdx) ?: (weatherV ?: topRowTarget)
                                 scrollToView(target)
                                 target
                             } else {
                                 val scroll = findViewById<ScrollView>(R.id.homeVerticalScroll)
                                 scroll?.smoothScrollTo(0, 0)
-                                topBarTargetFor(v)
+                                weatherV ?: topRowTarget
                             }
                         } else {
                             val scroll = findViewById<ScrollView>(R.id.homeVerticalScroll)
                             scroll?.smoothScrollTo(0, 0)
-                            topBarTargetFor(v)
+                            weatherV ?: topRowTarget
                         }
                     }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
