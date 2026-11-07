@@ -501,7 +501,7 @@ class MainActivity : Activity() {
             isFocusable = true
             isClickable = true
             val pill = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
+                cornerRadius = dp(16).toFloat()
             }
             background = pill
             setOnFocusChangeListener { v, focused ->
@@ -512,7 +512,7 @@ class MainActivity : Activity() {
                     pill.setColor(Color.TRANSPARENT)
                     pill.setStroke(0, Color.TRANSPARENT)
                 }
-                v.animate().scaleX(if (focused) 1.06f else 1f).scaleY(if (focused) 1.06f else 1f)
+                v.animate().scaleX(if (focused) 1.05f else 1f).scaleY(if (focused) 1.05f else 1f)
                     .setDuration(160).setInterpolator(DECELERATE).start()
             }
             setOnClickListener { showExpandedWeather() }
