@@ -501,7 +501,7 @@ class MainActivity : Activity() {
             isFocusable = true
             isClickable = true
             val pill = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
+                cornerRadius = dp(20).toFloat()
             }
             background = pill
             setOnFocusChangeListener { v, focused ->
