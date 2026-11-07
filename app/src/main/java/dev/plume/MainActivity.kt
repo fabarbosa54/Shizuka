@@ -497,6 +497,26 @@ class MainActivity : Activity() {
             setOnClickListener { action() }
             setOnLongClickListener { if (!holdFired) fireHold(this); true } // hold OK: move, hide or add icons
         }
+        findViewById<TextView>(R.id.weather)?.apply {
+            isFocusable = true
+            isClickable = true
+            val pill = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+            }
+            background = pill
+            setOnFocusChangeListener { v, focused ->
+                if (focused) {
+                    pill.setColor(if (glassActive()) (if (dark) 0x33FFFFFF.toInt() else 0x4DFFFFFF.toInt()) else (if (dark) 0x33FFFFFF.toInt() else 0x22000000.toInt()))
+                    pill.setStroke(dp(1), if (dark) 0x66FFFFFF.toInt() else 0x4D000000.toInt())
+                } else {
+                    pill.setColor(Color.TRANSPARENT)
+                    pill.setStroke(0, Color.TRANSPARENT)
+                }
+                v.animate().scaleX(if (focused) 1.06f else 1f).scaleY(if (focused) 1.06f else 1f)
+                    .setDuration(160).setInterpolator(DECELERATE).start()
+            }
+            setOnClickListener { showExpandedWeather() }
+        }
         renderInputsBar()
         if (fakeSetup(intent)) {
             // debug: setup for a pretend TV already started
@@ -1160,6 +1180,7 @@ class MainActivity : Activity() {
     @Deprecated("Home screen: Back only closes overlays")
     override fun onBackPressed() {
         when {
+            weatherWidgetView != null -> hideExpandedWeather()
             settingsScrim.visibility == View.VISIBLE -> pageBack?.invoke() ?: closeLauncherSettings()
             allApps.visibility == View.VISIBLE -> closeAllApps()
             currentFocus?.getTag(R.id.watchScroll) == "yt_drawer" || (activeYtRow != null && (currentFocus?.parent as? View)?.parent === activeYtRow) -> {
@@ -5300,7 +5321,26 @@ class MainActivity : Activity() {
         val currentRow = findAppRowFor(v)
         val inputsContainer = findViewById<LinearLayout>(R.id.inputsBar)
 
+        val weatherV = findViewById<View>(R.id.weather)?.takeIf { it.visibility == View.VISIBLE && it.isFocusable }
+
         return when {
+            v === weatherV -> when (key) {
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    val target = apps ?: cards ?: v
+                    scrollToView(target)
+                    target
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (inputsContainer != null && inputsContainer.childCount > 0) {
+                        inputsContainer.getChildAt(0)
+                    } else if (!topBarExpanded) {
+                        findViewById(R.id.topMenuToggle)
+                    } else {
+                        shownTop().mapNotNull { findViewById<View>(it) }.firstOrNull { it.visibility == View.VISIBLE } ?: v
+                    }
+                }
+                else -> null
+            }
             v.parent === inputsContainer -> {
                 val inputIdx = inputsContainer?.indexOfChild(v) ?: 0
                 val totalInputs = inputsContainer?.childCount ?: 0
@@ -5311,7 +5351,7 @@ class MainActivity : Activity() {
                         target
                     }
                     KeyEvent.KEYCODE_DPAD_UP -> v
-                    KeyEvent.KEYCODE_DPAD_LEFT -> if (inputIdx == 0) v else null
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (inputIdx == 0) weatherV ?: v else null
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         if (inputIdx < totalInputs - 1) null
                         else if (!topBarExpanded) findViewById(R.id.topMenuToggle)
@@ -5331,7 +5371,7 @@ class MainActivity : Activity() {
                     if (v.id == R.id.topMenuToggle || v.id == shownTop().first()) {
                         if (inputsContainer != null && inputsContainer.childCount > 0) {
                             inputsContainer.getChildAt(inputsContainer.childCount - 1)
-                        } else v
+                        } else weatherV ?: v
                     } else null
                 }
                 KeyEvent.KEYCODE_DPAD_RIGHT -> if (v.id == R.id.topMenuToggle || v.id == shownTop().last()) v else null
@@ -6891,13 +6931,21 @@ class MainActivity : Activity() {
                         .putLong("geo_time", System.currentTimeMillis()).apply()
                 }
                 if (!prefs.contains("geo_lat")) return@execute
-                val now = getJson("https://api.open-meteo.com/v1/forecast?latitude=${prefs.getFloat("geo_lat", 0f)}" +
-                    "&longitude=${prefs.getFloat("geo_lon", 0f)}&current=temperature_2m,weather_code,is_day").getJSONObject("current")
-                prefs.edit()
+                val res = getJson("https://api.open-meteo.com/v1/forecast?latitude=${prefs.getFloat("geo_lat", 0f)}" +
+                    "&longitude=${prefs.getFloat("geo_lon", 0f)}" +
+                    "&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code,is_day" +
+                    "&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=4")
+                val now = res.getJSONObject("current")
+                val daily = res.optJSONObject("daily")
+                val ed = prefs.edit()
                     .putFloat("wx_temp", now.getDouble("temperature_2m").toFloat())
                     .putInt("wx_code", now.getInt("weather_code"))
                     .putBoolean("wx_day", now.optInt("is_day", 1) == 1)
-                    .putLong("wx_time", System.currentTimeMillis()).apply()
+                    .putInt("wx_hum", now.optInt("relative_humidity_2m", 0))
+                    .putFloat("wx_wind", now.optDouble("wind_speed_10m", 0.0).toFloat())
+                    .putLong("wx_time", System.currentTimeMillis())
+                if (daily != null) ed.putString("wx_daily", daily.toString())
+                ed.apply()
                 ui.post { if (!isDestroyed) showWeather() }
             } catch (e: Exception) {
                 android.util.Log.w("TvHome", "weather failed ($e)") // keep the last reading; next tick retries
@@ -7004,9 +7052,10 @@ class MainActivity : Activity() {
         }
         val c = prefs.getFloat("wx_temp", 0f)
         val temp = Math.round(if (unit == "f") c * 9 / 5 + 32 else c)
-        // Sits after the date on the same line: an icon for the sky, then the temperature. The city stays in settings.
         val code = prefs.getInt("wx_code", 0)
-        view.text = "$temp°"
+        val city = prefs.getString("geo_city", "").orEmpty()
+        val word = weatherWord(code)
+        view.text = if (city.isNotEmpty() && word.isNotEmpty()) "$temp° · $city · $word" else if (word.isNotEmpty()) "$temp° · $word" else "$temp°"
         view.contentDescription = "$temp° ${weatherWord(code)}"
         val icon = getDrawable(weatherIcon(code, prefs.getBoolean("wx_day", true)))!!.mutate().apply { setBounds(0, 0, dp(18), dp(18)) }
         view.setCompoundDrawablesRelative(icon, null, null, null)
@@ -7037,6 +7086,239 @@ class MainActivity : Activity() {
         in 71..77, 85, 86 -> getString(R.string.wx_snow)
         in 95..99 -> getString(R.string.wx_thunderstorm)
         else -> ""
+    }
+
+    private var weatherWidgetView: FrameLayout? = null
+
+    private fun showExpandedWeather() {
+        if (weatherWidgetView != null) {
+            hideExpandedWeather()
+            return
+        }
+        val root = findViewById<FrameLayout>(R.id.root) ?: return
+        val unit = prefs.getString("weather", "off")
+        if (unit == "off" || !prefs.contains("wx_temp")) return
+
+        val c = prefs.getFloat("wx_temp", 0f)
+        val temp = Math.round(if (unit == "f") c * 9 / 5 + 32 else c)
+        val code = prefs.getInt("wx_code", 0)
+        val isDay = prefs.getBoolean("wx_day", true)
+        val city = prefs.getString("geo_city", getString(R.string.weather)).orEmpty()
+        val word = weatherWord(code)
+        val hum = prefs.getInt("wx_hum", 0)
+        val wind = prefs.getFloat("wx_wind", 0f)
+
+        // Parse daily forecast
+        var minToday: Int? = null
+        var maxToday: Int? = null
+        data class ForecastDay(val dayName: String, val code: Int, val minTemp: Int, val maxTemp: Int)
+        val nextDays = ArrayList<ForecastDay>()
+
+        try {
+            val dailyStr = prefs.getString("wx_daily", null)
+            if (dailyStr != null) {
+                val dailyJson = JSONObject(dailyStr)
+                val times = dailyJson.optJSONArray("time")
+                val codes = dailyJson.optJSONArray("weather_code")
+                val mins = dailyJson.optJSONArray("temperature_2m_min")
+                val maxs = dailyJson.optJSONArray("temperature_2m_max")
+                if (times != null && codes != null && mins != null && maxs != null) {
+                    val count = times.length()
+                    for (i in 0 until count) {
+                        val minC = mins.getDouble(i).toFloat()
+                        val maxC = maxs.getDouble(i).toFloat()
+                        val minT = Math.round(if (unit == "f") minC * 9 / 5 + 32 else minC)
+                        val maxT = Math.round(if (unit == "f") maxC * 9 / 5 + 32 else maxC)
+                        val dayCode = codes.getInt(i)
+                        val dateStr = times.getString(i)
+                        if (i == 0) {
+                            minToday = minT
+                            maxToday = maxT
+                        } else if (nextDays.size < 3) {
+                            val dayLabel = try {
+                                val d = java.time.LocalDate.parse(dateStr)
+                                d.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.getDefault())
+                                    .replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() }
+                            } catch (e: Exception) {
+                                "J+$i"
+                            }
+                            nextDays.add(ForecastDay(dayLabel, dayCode, minT, maxT))
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("Weather", "daily forecast parse error: $e")
+        }
+
+        val card: LinearLayout = if (glassActive()) {
+            glassSurface(dp(24).toFloat()).also { box ->
+                box.glass.ref = root
+            }
+        } else {
+            LinearLayout(this).apply {
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(24).toFloat()
+                    setColor(if (dark) 0xEE121316.toInt() else 0xF5F7F8FA.toInt())
+                    setStroke(1, if (dark) 0x26FFFFFF.toInt() else 0x1A000000.toInt())
+                }
+            }
+        }
+
+        card.apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(28), dp(24), dp(28), dp(24))
+            isFocusable = true
+            isClickable = true
+
+            // Top section: Left info + Right big icon
+            val topRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            val leftInfo = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+
+                // City
+                addView(label(city, 16f).apply {
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(if (dark) Color.WHITE else 0xFF111111.toInt())
+                })
+
+                // Big temperature
+                addView(label("$temp°", 44f).apply {
+                    setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL))
+                    setTextColor(if (dark) Color.WHITE else 0xFF111111.toInt())
+                    setPadding(0, dp(2), 0, dp(2))
+                })
+
+                // Condition + Min/Max + Hum/Wind
+                val details = buildString {
+                    if (word.isNotEmpty()) append(word)
+                    if (minToday != null && maxToday != null) {
+                        if (isNotEmpty()) append(" · ")
+                        append("↓ $minToday° ↑ $maxToday°")
+                    }
+                    if (hum > 0) {
+                        if (isNotEmpty()) append(" · ")
+                        append("$hum%")
+                    }
+                    if (wind > 0) {
+                        if (isNotEmpty()) append(" · ")
+                        append("${Math.round(wind)} km/h")
+                    }
+                }
+                addView(label(details, 13f).apply {
+                    setTextColor(if (dark) 0xCCFFFFFF.toInt() else 0x99000000.toInt())
+                })
+            }
+            topRow.addView(leftInfo)
+
+            // Right big icon
+            val iconView = ImageView(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(56), dp(56)).apply {
+                    marginStart = dp(16)
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                val ic = getDrawable(weatherIcon(code, isDay))?.mutate()
+                setImageDrawable(ic)
+                setColorFilter(if (dark) Color.WHITE else 0xFF111111.toInt())
+            }
+            topRow.addView(iconView)
+            addView(topRow)
+
+            // Separator if we have forecast
+            if (nextDays.isNotEmpty()) {
+                val sep = View(this@MainActivity).apply {
+                    layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(1)).apply {
+                        setMargins(0, dp(18), 0, dp(14))
+                    }
+                    setBackgroundColor(if (dark) 0x26FFFFFF.toInt() else 0x1A000000.toInt())
+                }
+                addView(sep)
+
+                // 3 days forecast row
+                val forecastRow = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                }
+
+                for (f in nextDays) {
+                    val dayCol = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER_HORIZONTAL
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+
+                        // Day name
+                        addView(label(f.dayName, 13f).apply {
+                            setTextColor(if (dark) 0xCCFFFFFF.toInt() else 0x99000000.toInt())
+                            gravity = Gravity.CENTER_HORIZONTAL
+                        })
+
+                        // Small icon
+                        val dayIcon = ImageView(this@MainActivity).apply {
+                            layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply {
+                                setMargins(0, dp(6), 0, dp(6))
+                            }
+                            setImageDrawable(getDrawable(weatherIcon(f.code, true))?.mutate())
+                            setColorFilter(if (dark) Color.WHITE else 0xFF111111.toInt())
+                        }
+                        addView(dayIcon)
+
+                        // Min / Max
+                        addView(label("${f.minTemp}° / ${f.maxTemp}°", 12f).apply {
+                            setTextColor(if (dark) Color.WHITE else 0xFF111111.toInt())
+                            gravity = Gravity.CENTER_HORIZONTAL
+                        })
+                    }
+                    forecastRow.addView(dayCol)
+                }
+                addView(forecastRow)
+            }
+
+            setOnClickListener { hideExpandedWeather() }
+        }
+
+        val scrim = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+            setBackgroundColor(0x77000000.toInt())
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { hideExpandedWeather() }
+        }
+
+        val lp = FrameLayout.LayoutParams(dp(460), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = dp(64)
+        }
+        scrim.addView(card, lp)
+
+        root.addView(scrim)
+        weatherWidgetView = scrim
+
+        card.scaleX = 0.88f
+        card.scaleY = 0.88f
+        card.alpha = 0f
+        scrim.alpha = 0f
+
+        scrim.animate().alpha(1f).setDuration(220).setInterpolator(DECELERATE).start()
+        card.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(220).setInterpolator(DECELERATE).start()
+        glass.kick(260)
+
+        card.requestFocus()
+    }
+
+    private fun hideExpandedWeather() {
+        val scrim = weatherWidgetView ?: return
+        weatherWidgetView = null
+        val card = scrim.getChildAt(0)
+        card?.animate()?.scaleX(0.88f)?.scaleY(0.88f)?.alpha(0f)?.setDuration(180)?.setInterpolator(DECELERATE)?.start()
+        scrim.animate().alpha(0f).setDuration(180).setInterpolator(DECELERATE).withEndAction {
+            (scrim.parent as? ViewGroup)?.removeView(scrim)
+            findViewById<View>(R.id.weather)?.requestFocus()
+        }.start()
+        glass.kick(200)
     }
 
     private fun getJson(url: String) = JSONObject(openStream(url).use { it.readBytes().decodeToString() })
