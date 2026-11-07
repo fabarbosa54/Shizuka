@@ -3071,7 +3071,31 @@ class MainActivity : Activity() {
         for (id in listOf(R.id.settingsCrumb, R.id.settingsHelp)) findViewById<TextView>(id).apply { setTextColor(valueInk()); panelShadow() }
         settingsScrim.background = spotlight.apply { reset() }
         pages.clear()
+        settingsScrim.alpha = 0f
         settingsScrim.visibility = View.VISIBLE
+        settingsScrim.animate()
+            .alpha(1f)
+            .setDuration(220)
+            .setInterpolator(DECELERATE)
+            .start()
+
+        val panel = findViewById<View>(R.id.settingsPanel)
+        panel.pivotX = panel.width.toFloat().takeIf { it > 0 } ?: dp(420).toFloat()
+        panel.pivotY = (resources.displayMetrics.heightPixels / 2f)
+        panel.translationX = dp(48).toFloat()
+        panel.scaleX = 0.92f
+        panel.scaleY = 0.92f
+        panel.alpha = 0f
+        panel.animate()
+            .translationX(0f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .alpha(1f)
+            .setDuration(260)
+            .setInterpolator(DECELERATE)
+            .start()
+        glass.kick(300)
+
         homeFocusable(false)
     }
 
@@ -3081,14 +3105,14 @@ class MainActivity : Activity() {
         if (glassActive()) {
             panel.background = null
             panel.setWillNotDraw(false)
-            styleGlass(panel.glass, dp(22).toFloat(), flatRight = true)
+            styleGlass(panel.glass, dp(26).toFloat(), flatRight = false)
         } else {
             panel.setWillNotDraw(true)
-            panel.background = if (!dark) ColorDrawable(0xFFF7F8FA.toInt())
-                else LayerDrawable(arrayOf(ColorDrawable(DARK_BG), ColorDrawable(PANEL_EDGE))).apply {
-                    setLayerGravity(1, Gravity.START or Gravity.FILL_VERTICAL)
-                    setLayerWidth(1, 1)
-                }
+            panel.background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(26).toFloat()
+                setColor(if (dark) 0xEE121316.toInt() else 0xF5F7F8FA.toInt())
+                setStroke(1, if (dark) 0x26FFFFFF.toInt() else 0x1A000000.toInt())
+            }
         }
         panel.invalidate()
         if (settingsScrim.background === spotlight) spotlight.invalidateSelf()
@@ -3097,15 +3121,42 @@ class MainActivity : Activity() {
 
     private fun closeLauncherSettings() {
         wallPreview = null
-        settingsScrim.animate().cancel()
-        settingsScrim.alpha = 1f
         pageExit?.invoke()
         pageExit = null
         pageBack = null
-        settingsScrim.visibility = View.GONE
-        homeFocusable(allApps.visibility != View.VISIBLE) // the PIN can open over All apps
-        (panelFrom?.takeIf { it.isAttachedToWindow } ?: findViewById(R.id.launcherSettings)).requestFocus()
-        panelFrom = null
+
+        val panel = findViewById<View>(R.id.settingsPanel)
+        panel.animate().cancel()
+        settingsScrim.animate().cancel()
+
+        panel.pivotX = panel.width.toFloat().takeIf { it > 0 } ?: dp(420).toFloat()
+        panel.pivotY = (resources.displayMetrics.heightPixels / 2f)
+        panel.animate()
+            .translationX(dp(48).toFloat())
+            .scaleX(0.92f)
+            .scaleY(0.92f)
+            .alpha(0f)
+            .setDuration(200)
+            .setInterpolator(DECELERATE)
+            .start()
+
+        settingsScrim.animate()
+            .alpha(0f)
+            .setDuration(200)
+            .setInterpolator(DECELERATE)
+            .withEndAction {
+                settingsScrim.visibility = View.GONE
+                settingsScrim.alpha = 1f
+                panel.translationX = 0f
+                panel.scaleX = 1f
+                panel.scaleY = 1f
+                panel.alpha = 1f
+                homeFocusable(allApps.visibility != View.VISIBLE) // the PIN can open over All apps
+                (panelFrom?.takeIf { it.isAttachedToWindow } ?: findViewById(R.id.launcherSettings)).requestFocus()
+                panelFrom = null
+            }
+            .start()
+        glass.kick(220)
     }
 
     private var panelFrom: View? = null // focus to go back to when the panel closes
